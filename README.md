@@ -8,8 +8,8 @@ directory structure specified by a "template" file.
 * Create template files to automatically specify what files to retrieve and
   where to place them.
 * Cross-platform means it works on Windows, Mac, and Linux!
-* (In the future) Selectively extract files from `.zip` (and other) archive
-  files into desired locations.
+* Selectively extract files from `.zip` (and other) archive files into desired
+  locations.
 * It's written in Rust!
 
 ## License

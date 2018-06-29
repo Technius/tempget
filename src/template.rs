@@ -8,7 +8,8 @@ use errors;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Template {
-    pub retrieve: HashMap<String, url_serde::SerdeUrl>
+    pub retrieve: HashMap<String, url_serde::SerdeUrl>,
+    pub extract: HashMap<String, ExtractInfo>
 }
 
 impl Template {
@@ -22,4 +23,11 @@ impl Template {
         let res = cfg.try_into()?;
         Ok(res)
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum ExtractInfo {
+    Directory(String),
+    Mapping(HashMap<String, String>)
 }
