@@ -1,10 +1,12 @@
 extern crate tempget;
 extern crate reqwest;
+extern crate pbr;
 
 use tempget::template;
 use tempget::errors;
 use std::fs;
 use std::io;
+use std::io::{Read, Write};
 use std::path::Path;
 
 fn main() {
@@ -40,7 +42,28 @@ fn do_fetch(templ: template::Template) -> errors::Result<()> {
 
 fn download_file(file_path: &Path, mut resp: reqwest::Response) -> io::Result<()> {
     let mut file = fs::File::create(file_path)?;
-    io::copy(&mut resp, &mut file)?;
+    let max_size_opt = resp.headers()
+        .get::<reqwest::header::ContentLength>()
+        .map(|cl| **cl);
+
+    if let Some(max_size) = max_size_opt {
+        // Need to manually copy because Write::broadcast is still unstable
+        let mut buf = [0; 1024 * 1024]; // 1 MB buffer
+        let mut progress = pbr::ProgressBar::new(max_size);
+        progress.set_units(pbr::Units::Bytes);
+        loop {
+            let len = resp.read(&mut buf)?;
+            if len == 0 {
+                break;
+            } else {
+                file.write_all(&buf[..len])?;
+            }
+            progress.add(len as u64);
+        }
+        progress.finish_print("done");
+    } else {
+        io::copy(&mut resp, &mut file)?;
+    }
     Ok(())
 }
 
