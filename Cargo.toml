@@ -1,0 +1,12 @@
+[package]
+name = "tempget"
+version = "0.1.0"
+authors = ["Bryan Tan <techniux@gmail.com>"]
+
+[dependencies]
+reqwest = "0.8.6"
+config = "0.8.0"
+serde = "^1.0.8"
+serde_derive = "^1.0.8"
+url_serde = "0.2.0"
+error-chain = "0.12.0"
