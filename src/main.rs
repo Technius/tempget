@@ -2,6 +2,7 @@ extern crate tempget;
 extern crate reqwest;
 
 use tempget::template;
+use tempget::errors;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -20,24 +21,19 @@ fn main() {
     }
 }
 
-fn do_fetch(templ: template::Template) -> io::Result<()> {
-    let res = tempget::fetcher::fetch_template(&templ);
-    match res {
-        Ok(responses) => {
-            for (path_str, response) in responses {
-                let path = Path::new(&path_str);
-                if path.exists() {
-                    println!("{} exists, skipping", path_str);
-                    continue;
-                }
-                println!("Downloading {} to {}", response.url(), path_str);
-                create_parent_dirs(&path)?;
-                download_file(&path, response)?;
-            }
-        },
-        Err(err) => {
-            println!("Error in connection: {}", err);
+fn do_fetch(templ: template::Template) -> errors::Result<()> {
+    let client = reqwest::Client::new();
+    let requests = tempget::fetcher::get_template_requests(&templ);
+    for (path_str, request) in requests {
+        let path = Path::new(&path_str);
+        if path.exists() {
+            println!("{} exists, skipping", path_str);
+            continue;
         }
+        println!("Downloading {} to {}", request.url(), path_str);
+        create_parent_dirs(&path)?;
+        let response = client.execute(request)?;
+        download_file(&path, response)?;
     }
     Ok(())
 }

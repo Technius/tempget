@@ -1,15 +1,15 @@
 use reqwest;
-use reqwest::Response;
+use reqwest::Request;
 use template::Template;
 use std::collections::HashMap;
 
-pub fn fetch_template(templ: &Template) -> reqwest::Result<HashMap<String, Response>> {
-    let client = reqwest::Client::new();
+/// Generates a mapping of file to HTTP requests
+pub fn get_template_requests(templ: &Template) -> HashMap<String, Request> {
     let mut data = HashMap::new();
     for (file_name, url) in &templ.retrieve {
         let url = url.clone().into_inner();
-        let text = client.get(url.clone()).send()?;
-        data.insert(file_name.clone(), text);
+        let req = Request::new(reqwest::Method::Get, url.clone());
+        data.insert(file_name.clone(), req);
     }
-    Ok(data)
+    data
 }
