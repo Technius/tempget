@@ -2,7 +2,6 @@ extern crate tempget;
 extern crate reqwest;
 
 use tempget::template;
-use tempget::errors::Error;
 use std::fs;
 use std::io;
 use std::path::Path;
