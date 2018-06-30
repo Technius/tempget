@@ -1,5 +1,6 @@
 use config;
 use std::fs;
+use std::path::Path;
 use std::io::Read;
 use std::collections::HashMap;
 use url_serde; // For deriving Deserialize for Url
@@ -13,9 +14,9 @@ pub struct Template {
 }
 
 impl Template {
-    pub fn from_file(fname: &str) -> errors::Result<Self> {
+    pub fn from_file(file_path: &Path) -> errors::Result<Self> {
         let mut cfg = config::Config::new();
-        let mut file = fs::File::open(fname)?;
+        let mut file = fs::File::open(file_path)?;
         let mut contents = String::new();
         file.read_to_string(&mut contents)?;
         let cfg_file = config::File::from_str(&contents, config::FileFormat::Toml);

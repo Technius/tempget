@@ -2,6 +2,8 @@
 extern crate serde_derive;
 #[macro_use]
 extern crate error_chain;
+#[macro_use]
+extern crate structopt;
 
 extern crate serde;
 extern crate config;
@@ -11,6 +13,7 @@ extern crate zip;
 
 pub mod template;
 pub mod fetcher;
+pub mod cli;
 
 pub mod errors {
     use std;

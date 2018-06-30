@@ -2,17 +2,21 @@ extern crate tempget;
 extern crate reqwest;
 extern crate pbr;
 extern crate zip;
+extern crate structopt;
 
 use tempget::template;
 use tempget::errors;
+use tempget::cli::CliOptions;
 use tempget::template::ExtractInfo;
 use std::fs;
 use std::io;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use structopt::StructOpt;
 
 fn main() {
-    let res = run("hello.toml");
+    let options = CliOptions::from_args();
+    let res = run(&options);
     match res {
         Ok(()) => {},
         Err(err) => {
@@ -21,10 +25,12 @@ fn main() {
     }
 }
 
-fn run(template_file: &str) -> errors::Result<()> {
-    let templ = template::Template::from_file(template_file)?;
+fn run(options: &CliOptions) -> errors::Result<()> {
+    let templ = template::Template::from_file(&options.template_file)?;
     do_fetch(&templ)?;
-    do_extract(templ)?;
+    if !options.no_extract {
+        do_extract(templ)?;
+    }
     Ok(())
 }
 
