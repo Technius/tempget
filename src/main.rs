@@ -3,7 +3,12 @@ extern crate reqwest;
 extern crate pbr;
 extern crate zip;
 extern crate structopt;
+extern crate tokio_core;
+extern crate tokio_codec;
+extern crate tokio_fs;
+extern crate futures;
 
+use futures::{Future, IntoFuture, Stream};
 use tempget::template;
 use tempget::errors;
 use tempget::cli::CliOptions;
@@ -13,6 +18,8 @@ use std::io;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use structopt::StructOpt;
+
+use reqwest::unstable::async as req;
 
 fn main() {
     let options = CliOptions::from_args();
@@ -35,22 +42,35 @@ fn run(options: &CliOptions) -> errors::Result<()> {
 }
 
 fn do_fetch(templ: &template::Template) -> errors::Result<()> {
-    let client = reqwest::Client::new();
-    let requests = tempget::fetcher::get_template_requests(&templ);
-    for (path_str, request) in requests {
+    let mut core = tokio_core::reactor::Core::new()?;
+    let client = req::Client::new(&core.handle());
+    let mut requests = Vec::<(PathBuf, req::Request)>::new();
+    for (path_str, request) in tempget::fetcher::get_template_requests(&templ) {
         let path = Path::new(&path_str);
         if path.exists() {
             println!("{} exists, skipping", path_str);
             continue;
         }
-        println!("Downloading {} to {}", request.url(), path_str);
-        create_parent_dirs(&path)?;
-        let response = client.execute(request)?;
-        let max_size_opt = response.headers()
-            .get::<reqwest::header::ContentLength>()
-            .map(|cl| **cl);
-        write_file(&path, response, &max_size_opt)?;
+        requests.push((path.to_owned(), request));
     }
+
+    let NUM_CONNECTIONS: usize = 5;
+    let tasks =
+        futures::stream::iter_ok(requests)
+        .map(|(path, request)| {
+            println!("Downloading {} to {:#?}", request.url(), path);
+            client.execute(request).map(|r| (path, r))
+        })
+        .buffer_unordered(NUM_CONNECTIONS)
+        .from_err::<errors::Error>()
+        .for_each(|(path, response)| {
+            let max_size_opt = response.headers()
+                .get::<reqwest::header::ContentLength>()
+                .map(|cl| **cl);
+            write_file(&path, response, &max_size_opt)
+        });
+
+    core.run(tasks)?;
     Ok(())
 }
 
@@ -95,28 +115,30 @@ fn do_extract(templ: template::Template) -> errors::Result<()> {
     Ok(())
 }
 
-fn write_file<R: Read>(file_path: &Path, mut input: R, max_size_opt: &Option<u64>) -> io::Result<()> {
-    let mut file = fs::File::create(file_path)?;
+fn write_file(file_path: &Path, response: req::Response, max_size_opt: &Option<u64>) -> impl Future<Item = (), Error = errors::Error> {
 
-    if let Some(max_size) = max_size_opt {
-        // Need to manually copy because Write::broadcast is still unstable
-        let mut buf = [0; 1024 * 1024]; // 1 MB buffer
-        let mut progress = pbr::ProgressBar::new(*max_size);
-        progress.set_units(pbr::Units::Bytes);
-        loop {
-            let len = input.read(&mut buf)?;
-            if len == 0 {
-                break;
-            } else {
-                file.write_all(&buf[..len])?;
-            }
-            progress.add(len as u64);
-        }
-        progress.finish_print("\n");
+    if let Some(_max_size) = max_size_opt {
+        // TODO: progress bar stuff
     } else {
-        io::copy(&mut input, &mut file)?;
+        // io::copy(&mut input, &mut file)?;
     }
-    Ok(())
+
+    println!("write_file called with {:#?}", file_path);
+    let file_path = file_path.to_owned();
+
+    tokio_fs::File::create(file_path.clone())
+        .from_err::<errors::Error>()
+        .and_then(move |file| {
+            println!("Starting file i/o for {:#?}", file_path);
+            let file_sink = tokio_codec::FramedWrite::new(file, tokio_codec::BytesCodec::new());
+            response.into_body()
+                .from_err::<errors::Error>()
+                .map(|chunk| (&*chunk).into())
+                .forward(file_sink)
+                .map(move |_| {
+                    println!("Done downloading {:#?}", file_path);
+                })
+    })
 }
 
 fn create_parent_dirs(file_path: &Path) -> io::Result<()> {
