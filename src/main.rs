@@ -59,20 +59,24 @@ fn do_fetch(templ: &template::Template) -> errors::Result<()> {
     let tasks = futures::stream::iter_ok(requests)
         .map(move |(path, request)| {
             println!("Downloading {} to {:#?}", request.url(), path);
-            client.execute(request).map(|r| (path, r))
+            client
+                .execute(request).map(|r| (path, r))
+                .from_err::<errors::Error>()
+                .and_then(move |(path, response)| {
+                    println!("Beginning download of {:#?}", path);
+                    let max_size_opt = response.headers()
+                        .get(reqwest::header::CONTENT_LENGTH)
+                        .and_then(|ct_len| ct_len.to_str().ok())
+                        .and_then(|ct_len| ct_len.parse().ok());
+                    write_file(&path, response, &max_size_opt)
+                })
         })
         .buffer_unordered(NUM_CONNECTIONS)
-        .from_err::<errors::Error>()
-        .for_each(move |(path, response)| {
-            println!("Beginning download of {:#?}", path);
-            let max_size_opt = response.headers()
-                .get(reqwest::header::CONTENT_LENGTH)
-                .and_then(|ct_len| ct_len.to_str().ok())
-                .and_then(|ct_len| ct_len.parse().ok());
-            write_file(&path, response, &max_size_opt)
+        .map(|file_path| {
+            println!("Done downloading {:#?}", file_path);
         });
 
-    runtime.block_on(tasks)?;
+    runtime.block_on(tasks.collect())?;
     runtime.shutdown_on_idle().wait().expect("Could not shutdown tokio runtime");
     Ok(())
 }
@@ -118,6 +122,8 @@ fn do_extract(templ: template::Template) -> errors::Result<()> {
     Ok(())
 }
 
+/// Returns a `Future` that represents asynchronously writing the contents of
+/// the `Response` to the given file path.
 fn write_file(file_path: &Path, response: req::Response, max_size_opt: &Option<u64>) -> impl Future<Item = (), Error = errors::Error> {
 
     if let Some(_max_size) = max_size_opt {
@@ -128,19 +134,17 @@ fn write_file(file_path: &Path, response: req::Response, max_size_opt: &Option<u
 
     let file_path = file_path.to_owned();
 
-    futures::future::result(create_parent_dirs(&file_path).map(|_| file_path.clone()))
+    futures::future::result(create_parent_dirs(&file_path).map(move |_| file_path))
         .from_err::<errors::Error>()
         .and_then(|path| tokio::fs::File::create(path).from_err::<errors::Error>())
-        .and_then(move |file| {
-            println!("Starting file i/o for {:#?}", file_path);
-            let file_sink = tokio_codec::FramedWrite::new(file, tokio_codec::BytesCodec::new());
+        .and_then(|file| {
+            let codec = tokio_codec::BytesCodec::new();
+            let file_sink = tokio_codec::FramedWrite::new(file, codec);
             response.into_body()
                 .from_err::<errors::Error>()
                 .map(|chunk| (&*chunk).into())
                 .forward(file_sink)
-                .map(move |_| {
-                    println!("Done downloading {:#?}", file_path);
-                })
+                .map(|_| ())
     })
 }
 
