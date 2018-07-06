@@ -3,19 +3,17 @@ extern crate reqwest;
 extern crate pbr;
 extern crate zip;
 extern crate structopt;
-extern crate tokio_core;
+extern crate tokio;
 extern crate tokio_codec;
-extern crate tokio_fs;
 extern crate futures;
 
-use futures::{Future, IntoFuture, Stream};
+use futures::{Future, Stream};
 use tempget::template;
 use tempget::errors;
 use tempget::cli::CliOptions;
 use tempget::template::ExtractInfo;
 use std::fs;
 use std::io;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use structopt::StructOpt;
 
@@ -42,8 +40,12 @@ fn run(options: &CliOptions) -> errors::Result<()> {
 }
 
 fn do_fetch(templ: &template::Template) -> errors::Result<()> {
-    let mut core = tokio_core::reactor::Core::new()?;
-    let client = req::Client::new(&core.handle());
+    const NUM_CONNECTIONS: usize = 5;
+    let pool_builder = tokio::executor::thread_pool::Builder::new();
+    let mut runtime = tokio::runtime::Builder::new()
+        .threadpool_builder(pool_builder)
+        .build()?;
+    let client = req::Client::new();
     let mut requests = Vec::<(PathBuf, req::Request)>::new();
     for (path_str, request) in tempget::fetcher::get_template_requests(&templ) {
         let path = Path::new(&path_str);
@@ -54,23 +56,24 @@ fn do_fetch(templ: &template::Template) -> errors::Result<()> {
         requests.push((path.to_owned(), request));
     }
 
-    let NUM_CONNECTIONS: usize = 5;
-    let tasks =
-        futures::stream::iter_ok(requests)
-        .map(|(path, request)| {
+    let tasks = futures::stream::iter_ok(requests)
+        .map(move |(path, request)| {
             println!("Downloading {} to {:#?}", request.url(), path);
             client.execute(request).map(|r| (path, r))
         })
         .buffer_unordered(NUM_CONNECTIONS)
         .from_err::<errors::Error>()
-        .for_each(|(path, response)| {
+        .for_each(move |(path, response)| {
+            println!("Beginning download of {:#?}", path);
             let max_size_opt = response.headers()
-                .get::<reqwest::header::ContentLength>()
-                .map(|cl| **cl);
+                .get(reqwest::header::CONTENT_LENGTH)
+                .and_then(|ct_len| ct_len.to_str().ok())
+                .and_then(|ct_len| ct_len.parse().ok());
             write_file(&path, response, &max_size_opt)
         });
 
-    core.run(tasks)?;
+    runtime.block_on(tasks)?;
+    runtime.shutdown_on_idle().wait().expect("Could not shutdown tokio runtime");
     Ok(())
 }
 
@@ -123,11 +126,11 @@ fn write_file(file_path: &Path, response: req::Response, max_size_opt: &Option<u
         // io::copy(&mut input, &mut file)?;
     }
 
-    println!("write_file called with {:#?}", file_path);
     let file_path = file_path.to_owned();
 
-    tokio_fs::File::create(file_path.clone())
+    futures::future::result(create_parent_dirs(&file_path).map(|_| file_path.clone()))
         .from_err::<errors::Error>()
+        .and_then(|path| tokio::fs::File::create(path).from_err::<errors::Error>())
         .and_then(move |file| {
             println!("Starting file i/o for {:#?}", file_path);
             let file_sink = tokio_codec::FramedWrite::new(file, tokio_codec::BytesCodec::new());
