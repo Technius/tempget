@@ -1,6 +1,6 @@
 extern crate tempget;
 extern crate reqwest;
-extern crate pbr;
+extern crate indicatif;
 extern crate zip;
 extern crate structopt;
 extern crate tokio;
@@ -15,6 +15,7 @@ use tempget::template::ExtractInfo;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use structopt::StructOpt;
 
 use reqwest::unstable::async as req;
@@ -56,27 +57,58 @@ fn do_fetch(templ: &template::Template) -> errors::Result<()> {
         requests.push((path.to_owned(), request));
     }
 
+    let multi_progress = indicatif::MultiProgress::new();
+    multi_progress.set_move_cursor(false);
+    let multi_progress = Arc::new(multi_progress);
+    let mp_clone = multi_progress.clone();
+
     let tasks = futures::stream::iter_ok(requests)
         .map(move |(path, request)| {
+            let multi_progress = mp_clone.clone();
             println!("Downloading {} to {:#?}", request.url(), path);
             client
                 .execute(request).map(|r| (path, r))
                 .from_err::<errors::Error>()
                 .and_then(move |(path, response)| {
-                    println!("Beginning download of {:#?}", path);
-                    let max_size_opt = response.headers()
+                    let mut progress_bar_opt = response.headers()
                         .get(reqwest::header::CONTENT_LENGTH)
                         .and_then(|ct_len| ct_len.to_str().ok())
-                        .and_then(|ct_len| ct_len.parse().ok());
-                    write_file(&path, response, &max_size_opt)
+                        .and_then(|ct_len| ct_len.parse().ok())
+                        .map(|size| {
+                            let pbar = indicatif::ProgressBar::new(size);
+                            pbar.set_style(
+                                indicatif::ProgressStyle::default_bar()
+                                    .template("{prefix} {bar} {percent}% {eta_precise} [{bytes} / {total_bytes}]")
+                                           );
+                            pbar.set_prefix(&format!("{:#?}", path));
+                            pbar
+                        });
+
+                    if let Some(bar) = progress_bar_opt {
+                        progress_bar_opt = Some(multi_progress.add(bar));
+                    }
+
+                    println!("Beginning download of {:#?}", path);
+                    write_file(&path, response, progress_bar_opt)
                 })
         })
-        .buffer_unordered(NUM_CONNECTIONS)
-        .map(|file_path| {
-            println!("Done downloading {:#?}", file_path);
-        });
+        .buffer_unordered(NUM_CONNECTIONS);
 
-    runtime.block_on(tasks.collect())?;
+    // FIXME: Files that download quickly have their progress bars displayed
+    // incorrectly
+    let done = Arc::new(std::sync::Mutex::new(false));
+    let done_clone = done.clone();
+    let f = futures::future::ok(())
+        .and_then(move |_| tasks.collect())
+        .map(move |_| {
+            *done_clone.lock().unwrap() = true;
+        })
+        .map_err(|_| ());
+    runtime.spawn(f);
+    while !*done.lock().unwrap() {
+        multi_progress.join_and_clear()?;
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
     runtime.shutdown_on_idle().wait().expect("Could not shutdown tokio runtime");
     Ok(())
 }
@@ -123,28 +155,34 @@ fn do_extract(templ: template::Template) -> errors::Result<()> {
 }
 
 /// Returns a `Future` that represents asynchronously writing the contents of
-/// the `Response` to the given file path.
-fn write_file(file_path: &Path, response: req::Response, max_size_opt: &Option<u64>) -> impl Future<Item = (), Error = errors::Error> {
-
-    if let Some(_max_size) = max_size_opt {
-        // TODO: progress bar stuff
-    } else {
-        // io::copy(&mut input, &mut file)?;
-    }
-
+/// the `Response` to the given file path. The resulting value is the given file
+/// path.
+fn write_file(file_path: &Path, response: req::Response, progress_opt: Option<indicatif::ProgressBar>) -> impl Future<Item = (), Error = errors::Error> {
     let file_path = file_path.to_owned();
 
-    futures::future::result(create_parent_dirs(&file_path).map(move |_| file_path))
+    futures::future::result(create_parent_dirs(&file_path).map(|_| file_path.clone()))
         .from_err::<errors::Error>()
         .and_then(|path| tokio::fs::File::create(path).from_err::<errors::Error>())
-        .and_then(|file| {
+        .and_then(move |file| {
+            let progress_opt = Arc::new(progress_opt);
+            let progress_opt_chunk = progress_opt.clone();
             let codec = tokio_codec::BytesCodec::new();
             let file_sink = tokio_codec::FramedWrite::new(file, codec);
             response.into_body()
                 .from_err::<errors::Error>()
+                .inspect(move |chunk| {
+                    if let Some(ref pbar) = *progress_opt_chunk {
+                        pbar.inc(chunk.len() as u64);
+                    }
+                })
                 .map(|chunk| (&*chunk).into())
                 .forward(file_sink)
-                .map(|_| ())
+                .map(move |_| {
+                    if let Some(ref pbar) = *progress_opt {
+                        pbar.finish_with_message(
+                            &format!("Done downloading {:#?}", file_path));
+                    };
+                })
     })
 }
 
