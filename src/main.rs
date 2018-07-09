@@ -1,24 +1,25 @@
 extern crate tempget;
 extern crate reqwest;
-extern crate indicatif;
 extern crate zip;
 extern crate structopt;
 extern crate tokio;
 extern crate tokio_codec;
 extern crate futures;
+extern crate console;
 
 use futures::{Future, Stream};
-use tempget::template;
-use tempget::errors;
-use tempget::cli::CliOptions;
-use tempget::template::ExtractInfo;
+use reqwest::unstable::async as req;
 use std::fs;
 use std::io;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::mpsc::{Receiver, SyncSender};
 use structopt::StructOpt;
 
-use reqwest::unstable::async as req;
+use tempget::template;
+use tempget::errors;
+use tempget::cli::*;
+use tempget::template::ExtractInfo;
 
 fn main() {
     let options = CliOptions::from_args();
@@ -33,6 +34,9 @@ fn main() {
 
 fn run(options: &CliOptions) -> errors::Result<()> {
     let templ = template::Template::from_file(&options.template_file)?;
+    // println!("{} Foo", termion::cursor::Save);
+    // println!("FooBar");
+    // println!("FooBar {}{}", termion::cursor::Restore, termion::clear::AfterCursor);
     do_fetch(&templ)?;
     if !options.no_extract {
         do_extract(templ)?;
@@ -47,69 +51,115 @@ fn do_fetch(templ: &template::Template) -> errors::Result<()> {
         .threadpool_builder(pool_builder)
         .build()?;
     let client = req::Client::new();
-    let mut requests = Vec::<(PathBuf, req::Request)>::new();
+    let mut requests = Vec::<(usize, PathBuf, req::Request)>::new();
+    let mut idx: usize = 0;
     for (path_str, request) in tempget::fetcher::get_template_requests(&templ) {
         let path = Path::new(&path_str);
         if path.exists() {
             println!("{} exists, skipping", path_str);
             continue;
         }
-        requests.push((path.to_owned(), request));
+        requests.push((idx, path.to_owned(), request));
+        idx += 1;
     }
 
-    let multi_progress = indicatif::MultiProgress::new();
-    multi_progress.set_move_cursor(false);
-    let multi_progress = Arc::new(multi_progress);
-    let mp_clone = multi_progress.clone();
+    let path_table: HashMap<usize, PathBuf> = requests.iter()
+        .map(|(idx, p, _)| (idx.clone(), p.clone()))
+        .collect();
+    let (prog_tx, prog_rx) = std::sync::mpsc::sync_channel::<DownloadStatus>(1000);
 
     let tasks = futures::stream::iter_ok(requests)
-        .map(move |(path, request)| {
-            let multi_progress = mp_clone.clone();
+        .map(move |(idx, path, request)| {
             println!("Downloading {} to {:#?}", request.url(), path);
+            let prog_tx = prog_tx.clone();
             client
                 .execute(request).map(|r| (path, r))
                 .from_err::<errors::Error>()
                 .and_then(move |(path, response)| {
-                    let mut progress_bar_opt = response.headers()
+                    let size_opt = response.headers()
                         .get(reqwest::header::CONTENT_LENGTH)
                         .and_then(|ct_len| ct_len.to_str().ok())
-                        .and_then(|ct_len| ct_len.parse().ok())
-                        .map(|size| {
-                            let pbar = indicatif::ProgressBar::new(size);
-                            pbar.set_style(
-                                indicatif::ProgressStyle::default_bar()
-                                    .template("{prefix} {bar} {percent}% {eta_precise} [{bytes} / {total_bytes}]")
-                                           );
-                            pbar.set_prefix(&format!("{:#?}", path));
-                            pbar
-                        });
+                        .and_then(|ct_len| ct_len.parse().ok());
 
-                    if let Some(bar) = progress_bar_opt {
-                        progress_bar_opt = Some(multi_progress.add(bar));
-                    }
+                    prog_tx.send(DownloadStatus::Start(idx, size_opt)).unwrap();
 
-                    println!("Beginning download of {:#?}", path);
-                    write_file(&path, response, progress_bar_opt)
+                    // println!("Beginning download of {:#?}", path);
+                    write_file(&path, response, idx, prog_tx)
                 })
         })
         .buffer_unordered(NUM_CONNECTIONS);
 
-    // FIXME: Files that download quickly have their progress bars displayed
-    // incorrectly
-    let done = Arc::new(std::sync::Mutex::new(false));
-    let done_clone = done.clone();
     let f = futures::future::ok(())
-        .and_then(move |_| tasks.collect())
-        .map(move |_| {
-            *done_clone.lock().unwrap() = true;
-        })
+        .and_then(move |_| tasks.collect().map(|_| ()))
         .map_err(|_| ());
     runtime.spawn(f);
-    while !*done.lock().unwrap() {
-        multi_progress.join_and_clear()?;
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
+
+    block_progress(&path_table, prog_rx)?;
     runtime.shutdown_on_idle().wait().expect("Could not shutdown tokio runtime");
+    Ok(())
+}
+
+/// Blocks and renders download progress until all files have been downloaded.
+fn block_progress(path_table: &HashMap<usize, PathBuf>,  rx: Receiver<DownloadStatus>)
+                  -> io::Result<()> {
+    // Maps index to downloaded
+    let mut current = HashMap::<usize, FileDownloadProgress>::new();
+    let mut finished = HashSet::<usize>::new();
+    // Throttle rendering so we don't spend so much time reporting progress
+    let mut last_render = std::time::Instant::now();
+    let mut renderer = ProgressRender::stderr();
+    loop {
+        use DownloadStatus::*;
+        match rx.recv() {
+            Ok(Start(idx, size_opt)) => {
+                current.insert(idx, FileDownloadProgress::new(size_opt));
+                renderer.clear()?;
+                renderer.message(format!("Downloading item {}", idx))?;
+                render_progress(&mut renderer, &current, &path_table, finished.len())?;
+                renderer.flush()?;
+            },
+            Ok(Progress(idx, down_size)) => {
+                current.get_mut(&idx).unwrap().inc(down_size as u64);
+                let now = std::time::Instant::now();
+                if now - last_render > std::time::Duration::from_millis(200) {
+                    last_render = now;
+                    renderer.clear()?;
+                    render_progress(&mut renderer, &current, &path_table, finished.len())?;
+                    renderer.flush()?;
+                }
+            },
+            Ok(Finish(idx)) => {
+                current.remove(&idx);
+                finished.insert(idx);
+                renderer.clear()?;
+                renderer.message(format!("Finished downloading {}", idx))?;
+                render_progress(&mut renderer, &current, &path_table, finished.len())?;
+                renderer.flush()?;
+            },
+            Err(_) => break
+        }
+    };
+    renderer.clear()?;
+    Ok(())
+}
+
+fn render_progress(renderer: &mut ProgressRender, current: &HashMap<usize, FileDownloadProgress>, path_table: &HashMap<usize, PathBuf>, fin: usize) -> io::Result<()> {
+    if current.is_empty() {
+        return Ok(());
+    }
+
+    renderer.println(format!("Downloading: ({}/{})", fin, path_table.len()))?;
+
+    for (idx, progress) in current {
+        let path = path_table.get(idx).unwrap();
+        if let Some(max_size) = &progress.max_size {
+            let percent = 100.0 * (progress.down_size as f64) / (*max_size as f64);
+            renderer.println(format!("{:#?} ({:.2}%)", path, percent))?;
+        } else {
+            renderer.println(format!("{:#?}", path))?;
+        }
+    }
+
     Ok(())
 }
 
@@ -157,31 +207,26 @@ fn do_extract(templ: template::Template) -> errors::Result<()> {
 /// Returns a `Future` that represents asynchronously writing the contents of
 /// the `Response` to the given file path. The resulting value is the given file
 /// path.
-fn write_file(file_path: &Path, response: req::Response, progress_opt: Option<indicatif::ProgressBar>) -> impl Future<Item = (), Error = errors::Error> {
+fn write_file(file_path: &Path, response: req::Response, idx: usize, prog_tx: SyncSender<DownloadStatus>) -> impl Future<Item = (usize, SyncSender<DownloadStatus>), Error = errors::Error> {
     let file_path = file_path.to_owned();
 
     futures::future::result(create_parent_dirs(&file_path).map(|_| file_path.clone()))
         .from_err::<errors::Error>()
         .and_then(|path| tokio::fs::File::create(path).from_err::<errors::Error>())
         .and_then(move |file| {
-            let progress_opt = Arc::new(progress_opt);
-            let progress_opt_chunk = progress_opt.clone();
             let codec = tokio_codec::BytesCodec::new();
             let file_sink = tokio_codec::FramedWrite::new(file, codec);
+            let prog_tx_prog = prog_tx.clone();
             response.into_body()
                 .from_err::<errors::Error>()
                 .inspect(move |chunk| {
-                    if let Some(ref pbar) = *progress_opt_chunk {
-                        pbar.inc(chunk.len() as u64);
-                    }
+                    prog_tx_prog.send(DownloadStatus::Progress(idx, chunk.len())).unwrap();
                 })
                 .map(|chunk| (&*chunk).into())
                 .forward(file_sink)
                 .map(move |_| {
-                    if let Some(ref pbar) = *progress_opt {
-                        pbar.finish_with_message(
-                            &format!("Done downloading {:#?}", file_path));
-                    };
+                    prog_tx.send(DownloadStatus::Finish(idx)).unwrap();
+                    (idx, prog_tx)
                 })
     })
 }

@@ -10,6 +10,7 @@ extern crate config;
 extern crate reqwest;
 extern crate url_serde;
 extern crate zip;
+extern crate console;
 
 pub mod template;
 pub mod fetcher;
