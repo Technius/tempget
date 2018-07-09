@@ -11,7 +11,7 @@ use futures::{Future, Stream};
 use reqwest::unstable::async as req;
 use std::fs;
 use std::io;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, SyncSender};
 use structopt::StructOpt;
@@ -34,9 +34,6 @@ fn main() {
 
 fn run(options: &CliOptions) -> errors::Result<()> {
     let templ = template::Template::from_file(&options.template_file)?;
-    // println!("{} Foo", termion::cursor::Save);
-    // println!("FooBar");
-    // println!("FooBar {}{}", termion::cursor::Restore, termion::clear::AfterCursor);
     do_fetch(&templ)?;
     if !options.no_extract {
         do_extract(templ)?;
@@ -63,9 +60,11 @@ fn do_fetch(templ: &template::Template) -> errors::Result<()> {
         idx += 1;
     }
 
-    let path_table: HashMap<usize, PathBuf> = requests.iter()
-        .map(|(idx, p, _)| (idx.clone(), p.clone()))
+    let file_info: HashMap<usize, _> = requests.iter()
+        .map(|(idx, p, req)| (idx.clone(), (p.clone(), req.url().clone())))
         .collect();
+    // `sync_channel` instead of `channel` since status message order is
+    // important
     let (prog_tx, prog_rx) = std::sync::mpsc::sync_channel::<DownloadStatus>(1000);
 
     let tasks = futures::stream::iter_ok(requests)
@@ -73,7 +72,8 @@ fn do_fetch(templ: &template::Template) -> errors::Result<()> {
             println!("Downloading {} to {:#?}", request.url(), path);
             let prog_tx = prog_tx.clone();
             client
-                .execute(request).map(|r| (path, r))
+                .execute(request)
+                .map(|r| (path, r))
                 .from_err::<errors::Error>()
                 .and_then(move |(path, response)| {
                     let size_opt = response.headers()
@@ -83,7 +83,6 @@ fn do_fetch(templ: &template::Template) -> errors::Result<()> {
 
                     prog_tx.send(DownloadStatus::Start(idx, size_opt)).unwrap();
 
-                    // println!("Beginning download of {:#?}", path);
                     write_file(&path, response, idx, prog_tx)
                 })
         })
@@ -94,17 +93,15 @@ fn do_fetch(templ: &template::Template) -> errors::Result<()> {
         .map_err(|_| ());
     runtime.spawn(f);
 
-    block_progress(&path_table, prog_rx)?;
+    block_progress(file_info, prog_rx)?;
     runtime.shutdown_on_idle().wait().expect("Could not shutdown tokio runtime");
     Ok(())
 }
 
 /// Blocks and renders download progress until all files have been downloaded.
-fn block_progress(path_table: &HashMap<usize, PathBuf>,  rx: Receiver<DownloadStatus>)
+fn block_progress(file_info: HashMap<usize, (PathBuf, reqwest::Url)>,  rx: Receiver<DownloadStatus>)
                   -> io::Result<()> {
-    // Maps index to downloaded
-    let mut current = HashMap::<usize, FileDownloadProgress>::new();
-    let mut finished = HashSet::<usize>::new();
+    let mut state = ProgressState::new(file_info);
     // Throttle rendering so we don't spend so much time reporting progress
     let mut last_render = std::time::Instant::now();
     let mut renderer = ProgressRender::stderr();
@@ -112,54 +109,33 @@ fn block_progress(path_table: &HashMap<usize, PathBuf>,  rx: Receiver<DownloadSt
         use DownloadStatus::*;
         match rx.recv() {
             Ok(Start(idx, size_opt)) => {
-                current.insert(idx, FileDownloadProgress::new(size_opt));
+                state.mark_current(&idx, size_opt);
                 renderer.clear()?;
                 renderer.message(format!("Downloading item {}", idx))?;
-                render_progress(&mut renderer, &current, &path_table, finished.len())?;
+                renderer.println_multi(&state.render())?;
                 renderer.flush()?;
             },
             Ok(Progress(idx, down_size)) => {
-                current.get_mut(&idx).unwrap().inc(down_size as u64);
+                state.inc_progress(idx, down_size as u64);
                 let now = std::time::Instant::now();
                 if now - last_render > std::time::Duration::from_millis(200) {
                     last_render = now;
                     renderer.clear()?;
-                    render_progress(&mut renderer, &current, &path_table, finished.len())?;
+                    renderer.println_multi(&state.render())?;
                     renderer.flush()?;
                 }
             },
             Ok(Finish(idx)) => {
-                current.remove(&idx);
-                finished.insert(idx);
+                state.mark_finished(&idx);
                 renderer.clear()?;
                 renderer.message(format!("Finished downloading {}", idx))?;
-                render_progress(&mut renderer, &current, &path_table, finished.len())?;
+                renderer.println_multi(&state.render())?;
                 renderer.flush()?;
             },
             Err(_) => break
         }
     };
     renderer.clear()?;
-    Ok(())
-}
-
-fn render_progress(renderer: &mut ProgressRender, current: &HashMap<usize, FileDownloadProgress>, path_table: &HashMap<usize, PathBuf>, fin: usize) -> io::Result<()> {
-    if current.is_empty() {
-        return Ok(());
-    }
-
-    renderer.println(format!("Downloading: ({}/{})", fin, path_table.len()))?;
-
-    for (idx, progress) in current {
-        let path = path_table.get(idx).unwrap();
-        if let Some(max_size) = &progress.max_size {
-            let percent = 100.0 * (progress.down_size as f64) / (*max_size as f64);
-            renderer.println(format!("{:#?} ({:.2}%)", path, percent))?;
-        } else {
-            renderer.println(format!("{:#?}", path))?;
-        }
-    }
-
     Ok(())
 }
 
@@ -212,13 +188,13 @@ fn write_file(file_path: &Path, response: req::Response, idx: usize, prog_tx: Sy
 
     futures::future::result(create_parent_dirs(&file_path).map(|_| file_path.clone()))
         .from_err::<errors::Error>()
-        .and_then(|path| tokio::fs::File::create(path).from_err::<errors::Error>())
+        .and_then(|path| tokio::fs::File::create(path).from_err::<_>())
         .and_then(move |file| {
             let codec = tokio_codec::BytesCodec::new();
             let file_sink = tokio_codec::FramedWrite::new(file, codec);
             let prog_tx_prog = prog_tx.clone();
             response.into_body()
-                .from_err::<errors::Error>()
+                .from_err::<_>()
                 .inspect(move |chunk| {
                     prog_tx_prog.send(DownloadStatus::Progress(idx, chunk.len())).unwrap();
                 })

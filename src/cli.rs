@@ -1,7 +1,8 @@
-use std::io;
-use std::path::PathBuf;
 use console::Term;
-use std::string::ToString;
+use reqwest::Url;
+use std::io;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(name = "tempget", about = "Downloads files based on a template")]
@@ -76,9 +77,19 @@ impl ProgressRender {
 
     /// Prints a line to the terminal buffer. This line will be cleared when
     /// `clear` is called.
-    pub fn println<S: ToString>(&mut self, s: S) -> io::Result<()> {
+    pub fn println<S: AsRef<str>>(&mut self, s: S) -> io::Result<()> {
         self.lines += 1;
-        self.term.write_line(&s.to_string())
+        self.term.write_line(s.as_ref())
+    }
+
+    /// Prints multiple lines to the terminal buffer. These lines will be
+    /// cleared when `clear` is called.
+    pub fn println_multi<S: AsRef<str>>(&mut self, lines: &[S]) -> io::Result<()> {
+        self.lines += lines.len();
+        for s in lines {
+            self.term.write_line(s.as_ref())?;
+        }
+        Ok(())
     }
 
     /// Flushes the buffered lines to the terminal.
@@ -96,7 +107,78 @@ impl ProgressRender {
     /// Prints the line to the terminal buffer. This line will _not_ be cleared
     /// when `clear` is called. Be careful to clear the terminal before using
     /// `message`.
-    pub fn message<S: ToString>(&mut self, s: S) -> io::Result<()> {
-        self.term.write_line(&s.to_string())
+    pub fn message<S: AsRef<str>>(&mut self, s: S) -> io::Result<()> {
+        self.term.write_line(s.as_ref())
+    }
+}
+
+/// Contains information about the download progress.
+pub struct ProgressState {
+    /// Maps file id to location on disk and URL
+    pub file_info: HashMap<usize, (PathBuf, Url)>,
+    /// Maps id to download progress
+    pub current: HashMap<usize, FileDownloadProgress>,
+    /// Tracks ids of files done downloading
+    pub finished: HashSet<usize>
+}
+
+impl ProgressState {
+    pub fn new(file_info: HashMap<usize, (PathBuf, Url)>) -> Self {
+        let size = file_info.len();
+        ProgressState {
+            current: HashMap::with_capacity(size),
+            file_info: file_info,
+            finished: HashSet::with_capacity(size)
+        }
+    }
+
+    /// Marks the file with the given id as being downloaded if the file
+    /// download has not started yet.
+    pub fn mark_current(&mut self, id: &usize, size_opt: Option<u64>) {
+        self.current.entry(id.clone()).or_insert(FileDownloadProgress::new(size_opt));
+    }
+
+    /// Marks the file with the given id as finished downloading. Does nothing
+    /// if the file is already marked as such.
+    pub fn mark_finished(&mut self, id: &usize) {
+        if let Some(_) = self.current.remove(id) {
+            self.finished.insert(id.clone());
+        }
+    }
+
+    /// Increases the progress of the file with the given id if it is being
+    /// downloaded, or does nothing otherwise.
+    pub fn inc_progress(&mut self, id: usize, amount: u64)  {
+        self.current.entry(id).and_modify(|prog| prog.inc(amount));
+    }
+
+    #[inline]
+    pub fn total(&self) -> usize {
+        return self.file_info.len()
+    }
+
+    pub fn get_path(&self, id: &usize) -> Option<&Path> {
+        return self.file_info.get(id).map(|(p, _)| p.as_path())
+    }
+
+    /// Renders the download progress to a `Vec<String>`
+    pub fn render(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        if !self.current.is_empty() {
+            lines.push(format!(
+                "Downloading: ({}/{})", self.finished.len(), self.total()));
+            for (id, progress) in &self.current {
+                let path = self.get_path(id).unwrap();
+                let path_str = path.to_string_lossy();
+                if let Some(max_size) = &progress.max_size {
+                    let percent = 100.0 * (progress.down_size as f64)
+                        / (*max_size as f64);
+                    lines.push(format!("{} ({:.2}%)", path_str, percent));
+                } else {
+                    lines.push(format!("{}", path_str));
+                }
+            }
+        }
+        lines
     }
 }
