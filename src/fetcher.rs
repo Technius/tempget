@@ -1,5 +1,5 @@
 use reqwest::Method;
-use reqwest::unstable::async::Request;
+use reqwest::async::Request;
 use template::Template;
 use std::collections::HashMap;
 

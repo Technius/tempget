@@ -8,7 +8,7 @@ extern crate futures;
 extern crate console;
 
 use futures::{Future, Stream};
-use reqwest::unstable::async as req;
+use reqwest::async as req;
 use std::fs;
 use std::io;
 use std::collections::HashMap;
