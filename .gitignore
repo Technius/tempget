@@ -1,2 +1,5 @@
 /target
 **/*.rs.bk
+/util/serve/*
+/util/testing
+!/util/serve/Makefile
