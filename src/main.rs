@@ -66,6 +66,10 @@ fn do_fetch(templ: &template::Template) -> errors::Result<()> {
     // `sync_channel` instead of `channel` since status message order is
     // important
     let (prog_tx, prog_rx) = std::sync::mpsc::sync_channel::<DownloadStatus>(1000);
+    // The futures might complete before progress tracking even begins, which
+    // causes the Receiver to fail since all senders will be dropped. This keeps
+    // the Receiver open until progress is reported.
+    let keep_alive = prog_tx.clone();
 
     let tasks = futures::stream::iter_ok(requests)
         .map(move |(idx, path, request)| {
@@ -94,6 +98,7 @@ fn do_fetch(templ: &template::Template) -> errors::Result<()> {
     runtime.spawn(f);
 
     block_progress(file_info, prog_rx)?;
+    drop(keep_alive);
     runtime.shutdown_on_idle().wait().expect("Could not shutdown tokio runtime");
     Ok(())
 }

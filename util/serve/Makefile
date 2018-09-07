@@ -1,6 +1,9 @@
-FILES := file_10m file_25m file_50m
+FILES := file_tiny file_10m file_25m file_50m
 
 all: $(FILES)
+
+file_tiny:
+	echo "Hello world" > $@
 
 file_10m:
 	@head -c 10M < /dev/urandom > $@
