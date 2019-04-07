@@ -132,6 +132,10 @@ impl ProgressState {
         }
     }
 
+    pub fn is_done(&self) -> bool {
+        self.file_info.len() == self.finished.len()
+    }
+
     /// Marks the file with the given id as being downloaded if the file
     /// download has not started yet.
     pub fn mark_current(&mut self, id: &usize, size_opt: Option<u64>) {

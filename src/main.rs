@@ -110,7 +110,7 @@ fn block_progress(file_info: HashMap<usize, (PathBuf, reqwest::Url)>,  rx: Recei
     // Throttle rendering so we don't spend so much time reporting progress
     let mut last_render = std::time::Instant::now();
     let mut renderer = ProgressRender::stderr();
-    loop {
+    while !state.is_done() {
         use DownloadStatus::*;
         match rx.recv() {
             Ok(Start(idx, size_opt)) => {
