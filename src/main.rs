@@ -43,10 +43,7 @@ fn run(options: &CliOptions) -> errors::Result<()> {
 
 fn do_fetch(templ: &template::Template) -> errors::Result<()> {
     const NUM_CONNECTIONS: usize = 5;
-    let pool_builder = tokio::executor::thread_pool::Builder::new();
-    let mut runtime = tokio::runtime::Builder::new()
-        .threadpool_builder(pool_builder)
-        .build()?;
+    let mut runtime = tokio::runtime::Builder::new().build()?;
     let client = req::Client::new();
     let mut requests = Vec::<(usize, PathBuf, req::Request)>::new();
     let mut idx: usize = 0;

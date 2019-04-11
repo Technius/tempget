@@ -16,6 +16,7 @@ pub mod template;
 pub mod fetcher;
 pub mod cli;
 
+#[allow(deprecated)] // See https://github.com/rust-lang-nursery/error-chain/issues/254
 pub mod errors {
     use std;
     use reqwest;
