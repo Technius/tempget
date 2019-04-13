@@ -34,15 +34,14 @@ fn main() {
 
 fn run(options: &CliOptions) -> errors::Result<()> {
     let templ = template::Template::from_file(&options.template_file)?;
-    do_fetch(&templ)?;
+    do_fetch(options, &templ)?;
     if !options.no_extract {
         do_extract(templ)?;
     }
     Ok(())
 }
 
-fn do_fetch(templ: &template::Template) -> errors::Result<()> {
-    const NUM_CONNECTIONS: usize = 5;
+fn do_fetch(options: &CliOptions, templ: &template::Template) -> errors::Result<()> {
     let mut runtime = tokio::runtime::Builder::new().build()?;
     let client = req::Client::new();
     let mut requests = Vec::<(usize, PathBuf, req::Request)>::new();
@@ -87,7 +86,7 @@ fn do_fetch(templ: &template::Template) -> errors::Result<()> {
                     write_file(&path, response, idx, prog_tx)
                 })
         })
-        .buffer_unordered(NUM_CONNECTIONS);
+        .buffer_unordered(options.parallelism);
 
     let f = futures::future::ok(())
         .and_then(move |_| tasks.collect().map(|_| ()))
