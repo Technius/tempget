@@ -1,0 +1,9 @@
+version: "3"
+services:
+  webserver:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./serve:/usr/share/nginx/html:ro
+      - ./site.conf:/etc/nginx/conf.d/default.conf

@@ -1,18 +1,25 @@
 extern crate tempget;
 extern crate reqwest;
-extern crate pbr;
 extern crate zip;
 extern crate structopt;
+extern crate tokio;
+extern crate tokio_codec;
+extern crate futures;
+extern crate console;
+
+use futures::{Future, Stream};
+use reqwest::async as req;
+use std::fs;
+use std::io;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{Receiver, SyncSender};
+use structopt::StructOpt;
 
 use tempget::template;
 use tempget::errors;
-use tempget::cli::CliOptions;
+use tempget::cli::*;
 use tempget::template::ExtractInfo;
-use std::fs;
-use std::io;
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
-use structopt::StructOpt;
 
 fn main() {
     let options = CliOptions::from_args();
@@ -27,30 +34,111 @@ fn main() {
 
 fn run(options: &CliOptions) -> errors::Result<()> {
     let templ = template::Template::from_file(&options.template_file)?;
-    do_fetch(&templ)?;
+    do_fetch(options, &templ)?;
     if !options.no_extract {
         do_extract(templ)?;
     }
     Ok(())
 }
 
-fn do_fetch(templ: &template::Template) -> errors::Result<()> {
-    let client = reqwest::Client::new();
-    let requests = tempget::fetcher::get_template_requests(&templ);
-    for (path_str, request) in requests {
+fn do_fetch(options: &CliOptions, templ: &template::Template) -> errors::Result<()> {
+    let mut runtime = tokio::runtime::Builder::new().build()?;
+    let client = req::Client::new();
+    let mut requests = Vec::<(usize, PathBuf, req::Request)>::new();
+    let mut idx: usize = 0;
+    for (path_str, request) in tempget::fetcher::get_template_requests(&templ) {
         let path = Path::new(&path_str);
         if path.exists() {
             println!("{} exists, skipping", path_str);
             continue;
         }
-        println!("Downloading {} to {}", request.url(), path_str);
-        create_parent_dirs(&path)?;
-        let response = client.execute(request)?;
-        let max_size_opt = response.headers()
-            .get::<reqwest::header::ContentLength>()
-            .map(|cl| **cl);
-        write_file(&path, response, &max_size_opt)?;
+        requests.push((idx, path.to_owned(), request));
+        idx += 1;
     }
+
+    let file_info: HashMap<usize, _> = requests.iter()
+        .map(|(idx, p, req)| (idx.clone(), (p.clone(), req.url().clone())))
+        .collect();
+    // `sync_channel` instead of `channel` since status message order is
+    // important
+    let (prog_tx, prog_rx) = std::sync::mpsc::sync_channel::<DownloadStatus>(1000);
+    // The futures might complete before progress tracking even begins, which
+    // causes the Receiver to fail since all senders will be dropped. This keeps
+    // the Receiver open until progress is reported.
+    let keep_alive = prog_tx.clone();
+
+    let tasks = futures::stream::iter_ok(requests)
+        .map(move |(idx, path, request)| {
+            let prog_tx = prog_tx.clone();
+            client
+                .execute(request)
+                .map(|r| (path, r))
+                .from_err::<errors::Error>()
+                .and_then(move |(path, response)| {
+                    let size_opt = response.headers()
+                        .get(reqwest::header::CONTENT_LENGTH)
+                        .and_then(|ct_len| ct_len.to_str().ok())
+                        .and_then(|ct_len| ct_len.parse().ok());
+
+                    prog_tx.send(DownloadStatus::Start(idx, size_opt)).unwrap();
+
+                    write_file(&path, response, idx, prog_tx)
+                })
+        })
+        .buffer_unordered(options.parallelism);
+
+    let f = futures::future::ok(())
+        .and_then(move |_| tasks.collect().map(|_| ()))
+        .map_err(|_| ());
+    runtime.spawn(f);
+
+    block_progress(file_info, prog_rx)?;
+    drop(keep_alive);
+    runtime.shutdown_on_idle().wait().expect("Could not shutdown tokio runtime");
+    Ok(())
+}
+
+/// Blocks and renders download progress until all files have been downloaded.
+fn block_progress(file_info: HashMap<usize, (PathBuf, reqwest::Url)>,  rx: Receiver<DownloadStatus>)
+                  -> io::Result<()> {
+    let mut state = ProgressState::new(file_info);
+    // Throttle rendering so we don't spend so much time reporting progress
+    let mut last_render = std::time::Instant::now();
+    let mut renderer = ProgressRender::stderr();
+    while !state.is_done() {
+        use DownloadStatus::*;
+        match rx.recv() {
+            Ok(Start(idx, size_opt)) => {
+                state.mark_current(&idx, size_opt);
+                renderer.clear()?;
+                let url = state.get_url(&idx).unwrap();
+                let path = state.get_path(&idx).unwrap().display();
+                renderer.message(format!("Downloading {} to {:#?}", url, path))?;
+                renderer.println_multi(&state.render())?;
+                renderer.flush()?;
+            },
+            Ok(Progress(idx, down_size)) => {
+                state.inc_progress(idx, down_size as u64);
+                let now = std::time::Instant::now();
+                if now - last_render > std::time::Duration::from_millis(200) {
+                    last_render = now;
+                    renderer.clear()?;
+                    renderer.println_multi(&state.render())?;
+                    renderer.flush()?;
+                }
+            },
+            Ok(Finish(idx)) => {
+                state.mark_finished(&idx);
+                renderer.clear()?;
+                let download_path = state.get_path(&idx).unwrap().display();
+                renderer.message(format!("Finished downloading {}", download_path))?;
+                renderer.println_multi(&state.render())?;
+                renderer.flush()?;
+            },
+            Err(_) => break
+        }
+    };
+    renderer.clear()?;
     Ok(())
 }
 
@@ -95,28 +183,31 @@ fn do_extract(templ: template::Template) -> errors::Result<()> {
     Ok(())
 }
 
-fn write_file<R: Read>(file_path: &Path, mut input: R, max_size_opt: &Option<u64>) -> io::Result<()> {
-    let mut file = fs::File::create(file_path)?;
+/// Returns a `Future` that represents asynchronously writing the contents of
+/// the `Response` to the given file path. The resulting value is the given file
+/// path.
+fn write_file(file_path: &Path, response: req::Response, idx: usize, prog_tx: SyncSender<DownloadStatus>) -> impl Future<Item = (usize, SyncSender<DownloadStatus>), Error = errors::Error> {
+    let file_path = file_path.to_owned();
 
-    if let Some(max_size) = max_size_opt {
-        // Need to manually copy because Write::broadcast is still unstable
-        let mut buf = [0; 1024 * 1024]; // 1 MB buffer
-        let mut progress = pbr::ProgressBar::new(*max_size);
-        progress.set_units(pbr::Units::Bytes);
-        loop {
-            let len = input.read(&mut buf)?;
-            if len == 0 {
-                break;
-            } else {
-                file.write_all(&buf[..len])?;
-            }
-            progress.add(len as u64);
-        }
-        progress.finish_print("\n");
-    } else {
-        io::copy(&mut input, &mut file)?;
-    }
-    Ok(())
+    futures::future::result(create_parent_dirs(&file_path).map(|_| file_path.clone()))
+        .from_err::<errors::Error>()
+        .and_then(|path| tokio::fs::File::create(path).from_err::<_>())
+        .and_then(move |file| {
+            let codec = tokio_codec::BytesCodec::new();
+            let file_sink = tokio_codec::FramedWrite::new(file, codec);
+            let prog_tx_prog = prog_tx.clone();
+            response.into_body()
+                .from_err::<_>()
+                .inspect(move |chunk| {
+                    prog_tx_prog.send(DownloadStatus::Progress(idx, chunk.len())).unwrap();
+                })
+                .map(|chunk| (&*chunk).into())
+                .forward(file_sink)
+                .map(move |_| {
+                    prog_tx.send(DownloadStatus::Finish(idx)).unwrap();
+                    (idx, prog_tx)
+                })
+    })
 }
 
 fn create_parent_dirs(file_path: &Path) -> io::Result<()> {
