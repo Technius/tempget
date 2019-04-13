@@ -10,10 +10,10 @@ jobs:
           key: project-cache
       - run:
           name: Build
-          command: rustup run stable cargo build
+          command: cargo build
       - run:
           name: Unit tests
-          command: rustup run stable cargo test
+          command: cargo test
       - save_cache:
           name: Cache dependencies
           key: project-cache
