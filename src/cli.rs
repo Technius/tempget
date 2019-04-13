@@ -179,6 +179,10 @@ impl ProgressState {
         return self.file_info.len()
     }
 
+    pub fn get_url(&self, id: &usize) -> Option<&reqwest::Url> {
+        return self.file_info.get(id).map(|(_, u)| u)
+    }
+
     pub fn get_path(&self, id: &usize) -> Option<&Path> {
         return self.file_info.get(id).map(|(p, _)| p.as_path())
     }

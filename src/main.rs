@@ -69,7 +69,6 @@ fn do_fetch(options: &CliOptions, templ: &template::Template) -> errors::Result<
 
     let tasks = futures::stream::iter_ok(requests)
         .map(move |(idx, path, request)| {
-            println!("Downloading {} to {:#?}", request.url(), path);
             let prog_tx = prog_tx.clone();
             client
                 .execute(request)
@@ -112,6 +111,9 @@ fn block_progress(file_info: HashMap<usize, (PathBuf, reqwest::Url)>,  rx: Recei
             Ok(Start(idx, size_opt)) => {
                 state.mark_current(&idx, size_opt);
                 renderer.clear()?;
+                let url = state.get_url(&idx).unwrap();
+                let path = state.get_path(&idx).unwrap().display();
+                renderer.message(format!("Downloading {} to {:#?}", url, path))?;
                 renderer.println_multi(&state.render())?;
                 renderer.flush()?;
             },
