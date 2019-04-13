@@ -113,7 +113,6 @@ fn block_progress(file_info: HashMap<usize, (PathBuf, reqwest::Url)>,  rx: Recei
             Ok(Start(idx, size_opt)) => {
                 state.mark_current(&idx, size_opt);
                 renderer.clear()?;
-                renderer.message(format!("Downloading item {}", idx))?;
                 renderer.println_multi(&state.render())?;
                 renderer.flush()?;
             },
@@ -130,7 +129,8 @@ fn block_progress(file_info: HashMap<usize, (PathBuf, reqwest::Url)>,  rx: Recei
             Ok(Finish(idx)) => {
                 state.mark_finished(&idx);
                 renderer.clear()?;
-                renderer.message(format!("Finished downloading {}", idx))?;
+                let download_path = state.get_path(&idx).unwrap().display();
+                renderer.message(format!("Finished downloading {}", download_path))?;
                 renderer.println_multi(&state.render())?;
                 renderer.flush()?;
             },

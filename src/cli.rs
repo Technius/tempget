@@ -3,6 +3,8 @@ use reqwest::Url;
 use std::io;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
+use number_prefix::NumberPrefix;
 
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(name = "tempget", about = "Downloads files based on a template")]
@@ -37,20 +39,33 @@ pub struct FileDownloadProgress {
     /// The max size of the file, in bytes.
     pub max_size: Option<u64>,
     /// The current number of bytes downloaded.
-    pub down_size: u64
+    pub down_size: u64,
+    /// The last time this progress was updated.
+    pub(self) last_update_time: Instant,
+    /// The rate of download (in bytes, rounded) during the last update.
+    pub(self) last_update_rate: u64
 }
 
 impl FileDownloadProgress {
     pub fn new(max_size: Option<u64>) -> Self {
         FileDownloadProgress {
             max_size,
-            down_size: 0
+            down_size: 0,
+            last_update_time: Instant::now(),
+            last_update_rate: 0
         }
     }
 
     /// Adds the given amount of progress to the current download size.
     pub fn inc(&mut self, b: u64) {
         self.down_size += b;
+        let now = Instant::now();
+        let passed = now.duration_since(self.last_update_time).as_secs();
+        // Only update if time has passed
+        if passed > 0 {
+            self.last_update_rate = b / passed;
+            self.last_update_time = now;
+        }
     }
 }
 
@@ -165,6 +180,14 @@ impl ProgressState {
         return self.file_info.get(id).map(|(p, _)| p.as_path())
     }
 
+    /// Displays the size number, along with its units.
+    fn display_bytes(size: u64) -> String {
+        match NumberPrefix::decimal(size as f64) {
+            NumberPrefix::Standalone(_) => format!("{} bytes", size),
+            NumberPrefix::Prefixed(units, n) => format!("{:.2} {}B", n, units)
+        }
+    }
+
     /// Renders the download progress to a `Vec<String>`
     pub fn render(&self) -> Vec<String> {
         let mut lines = Vec::new();
@@ -175,9 +198,13 @@ impl ProgressState {
                 let path = self.get_path(id).unwrap();
                 let path_str = path.to_string_lossy();
                 if let Some(max_size) = &progress.max_size {
+                    let down_bytes = Self::display_bytes(progress.down_size);
+                    let total_bytes = Self::display_bytes(*max_size);
+                    let rate_bytes = Self::display_bytes(progress.last_update_rate);
                     let percent = 100.0 * (progress.down_size as f64)
                         / (*max_size as f64);
-                    lines.push(format!("{} ({:.2}%)", path_str, percent));
+                    lines.push(format!("{}\t{} / {} ({:.2}%), {}/s",
+                                       path_str, down_bytes, total_bytes, percent, rate_bytes));
                 } else {
                     lines.push(format!("{}", path_str));
                 }
