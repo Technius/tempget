@@ -1,0 +1,22 @@
+version: 2
+jobs:
+  build:
+    docker:
+      - image: circleci/rust:stretch
+    steps:
+      - checkout
+      - restore_cache:
+          name: Restore cached dependencies
+          key: project-cache
+      - run:
+          name: Build
+          command: rustup run stable cargo build
+      - run:
+          name: Unit tests
+          command: rustup run stable cargo test
+      - save_cache:
+          name: Cache dependencies
+          key: project-cache
+          paths:
+            - "~/.cargo"
+            - ".target"
