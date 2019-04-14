@@ -29,3 +29,5 @@ jobs:
             - "~/.cargo"
             - "target/release/deps"
             - "target/release/.fingerprint"
+      - store_artifacts:
+          path: "target/release/tempget"
