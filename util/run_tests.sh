@@ -14,6 +14,5 @@ testimage="tempget_test"
 
 # Execute tests
 for f in $(ls test_templates); do
-    tfile="/test_templates/$f"
-    docker run --network container:$nginx_cont --rm $testimage "$f"
+    docker run --network container:$nginx_cont --rm $testimage "/test_templates/$f"
 done
