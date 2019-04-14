@@ -16,7 +16,7 @@ pub struct CliOptions {
     /// When this flag is present, files are not extracted from the given zip
     /// files.
     pub no_extract: bool,
-    #[structopt(short = "p", long = "parallelism")]
+    #[structopt(short = "p", long = "parallelism", default_value = "4")]
     /// The maximum number of files that should be downloaded simultaneously.
     pub parallelism: usize
 }
