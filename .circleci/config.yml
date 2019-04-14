@@ -14,6 +14,13 @@ jobs:
       - run:
           name: Unit tests
           command: cargo test --release
+      - save_cache:
+          name: Cache dependencies
+          key: project-cache
+          paths:
+            - "~/.cargo"
+            - "target/release/deps"
+            - "target/release/.fingerprint"
       - setup_remote_docker
       - run:
           name: Download tests
@@ -22,12 +29,5 @@ jobs:
             cd util
             make -C serve
             ./run_tests.sh
-      - save_cache:
-          name: Cache dependencies
-          key: project-cache
-          paths:
-            - "~/.cargo"
-            - "target/release/deps"
-            - "target/release/.fingerprint"
       - store_artifacts:
           path: "target/release/tempget"
