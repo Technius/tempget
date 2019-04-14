@@ -7,7 +7,7 @@ jobs:
       - checkout
       - restore_cache:
           name: Restore cached dependencies
-          key: project-cache
+          key: project-cache-{{ checksum "Cargo.lock" }}
       - run:
           name: Build
           command: cargo build --release
@@ -16,10 +16,11 @@ jobs:
           command: cargo test --release
       - save_cache:
           name: Cache dependencies
-          key: project-cache
+          key: project-cache-{{ checksum "Cargo.lock" }}
           paths:
             - "~/.cargo"
-            - "target"
+            - "target/release/deps"
+            - "target/release/.fingerprint"
       - setup_remote_docker
       - run:
           name: Download tests
