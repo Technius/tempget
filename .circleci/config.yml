@@ -27,5 +27,5 @@ jobs:
           key: project-cache
           paths:
             - "~/.cargo"
-            - "target/debug/deps"
-            - "target/debug/.fingerprint"
+            - "target/release/deps"
+            - "target/release/.fingerprint"
