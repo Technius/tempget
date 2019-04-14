@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["Bryan Tan <techniux@gmail.com>"]
 
 [dependencies]
-reqwest = "^0.9.14"
+reqwest = { version = "^0.9.14", default-features = false, features = ["rustls-tls"] }
 config = "0.8.0"
 serde = "^1.0.8"
 serde_derive = "^1.0.8"
