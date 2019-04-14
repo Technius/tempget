@@ -19,8 +19,7 @@ jobs:
           key: project-cache
           paths:
             - "~/.cargo"
-            - "target/release/deps"
-            - "target/release/.fingerprint"
+            - "target"
       - setup_remote_docker
       - run:
           name: Download tests
