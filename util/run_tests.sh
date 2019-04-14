@@ -15,5 +15,5 @@ testimage="tempget_test"
 # Execute tests
 for f in $(ls test_templates); do
     docker run --network container:$nginx_cont --rm $testimage \
-           -c timeout 45 tempget "/test_templates/$f"
+           -c "timeout 45 tempget /test_templates/$f"
 done
