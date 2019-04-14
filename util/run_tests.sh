@@ -14,7 +14,7 @@ docker create --name $app_cont --network container:$nginx_cont debian:stretch /b
 docker cp ../target/release/tempget $app_cont:/usr/bin/tempget
 docker cp test_templates $app_cont:/test_templates
 docker start $app_cont
-docker exec $app_cont mkdir /testing
+docker exec $app_cont 'mkdir /testing && apt update && apt install libssl1.0.0'
 
 # Execute tests
 for f in $(ls test_templates); do
