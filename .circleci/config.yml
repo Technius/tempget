@@ -21,7 +21,6 @@ jobs:
             set -x -e
             cd util
             make -C serve
-            docker-compose up -d
             ./run_tests.sh
       - save_cache:
           name: Cache dependencies
