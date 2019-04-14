@@ -1,6 +1,6 @@
 FROM ubuntu:18.04
 COPY target/release/tempget /usr/bin/tempget
 COPY util/test_templates /test_templates
-RUN mkdir /testing
+RUN chmod +x /usr/bin/tempget && mkdir /testing
 WORKDIR /testing
-ENTRYPOINT ["tempget"]
+ENTRYPOINT ["/bin/bash"]
