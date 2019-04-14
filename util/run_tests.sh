@@ -18,5 +18,6 @@ docker exec $app_cont mkdir /testing
 
 # Execute tests
 for f in $(ls test_templates); do
-    docker exec -w /testing $app_cont tempget "/test_templates/$f"
+    tfile="/test_templates/$f"
+    docker exec $app_cont /bin/sh -c "cd /testing && tempget \"/test_templates/$f\""
 done
