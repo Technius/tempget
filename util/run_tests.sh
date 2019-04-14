@@ -11,7 +11,7 @@ docker start $nginx_cont
 # Setup tempget
 app_cont="tempget_app"
 docker create --name $app_cont --network container:$nginx_cont debian:stretch /bin/sh -c 'while true; do sleep 1; done'
-docker cp ../target/debug/tempget $app_cont:/usr/bin/tempget
+docker cp ../target/release/tempget $app_cont:/usr/bin/tempget
 docker cp test_templates $app_cont:/test_templates
 docker start $app_cont
 docker exec $app_cont mkdir /testing
