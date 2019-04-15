@@ -26,7 +26,7 @@ pub mod errors {
     error_chain! {
         foreign_links {
             Io(std::io::Error);
-            Reqwest(reqwest::Error);
+            ReqwestFail(reqwest::Error);
             Config(config::ConfigError);
             Zip(zip::result::ZipError);
         }

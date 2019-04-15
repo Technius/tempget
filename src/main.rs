@@ -14,6 +14,7 @@ use std::io;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, SyncSender};
+use std::time::Duration;
 use structopt::StructOpt;
 
 use tempget::template;
@@ -42,8 +43,11 @@ fn run(options: &CliOptions) -> errors::Result<()> {
 }
 
 fn do_fetch(options: &CliOptions, templ: &template::Template) -> errors::Result<()> {
+    const REQUEST_TIMEOUT : u64 = 10; // seconds
     let mut runtime = tokio::runtime::Builder::new().build()?;
-    let client = req::Client::new();
+    let client = req::Client::builder()
+        .connect_timeout(Duration::from_secs(REQUEST_TIMEOUT))
+        .build()?;
     let mut requests = Vec::<(usize, PathBuf, req::Request)>::new();
     let mut idx: usize = 0;
     for (path_str, request) in tempget::fetcher::get_template_requests(&templ) {
@@ -62,6 +66,7 @@ fn do_fetch(options: &CliOptions, templ: &template::Template) -> errors::Result<
     // `sync_channel` instead of `channel` since status message order is
     // important
     let (prog_tx, prog_rx) = std::sync::mpsc::sync_channel::<DownloadStatus>(1000);
+    let err_tx = prog_tx.clone();
     // The futures might complete before progress tracking even begins, which
     // causes the Receiver to fail since all senders will be dropped. This keeps
     // the Receiver open until progress is reported.
@@ -70,6 +75,7 @@ fn do_fetch(options: &CliOptions, templ: &template::Template) -> errors::Result<
     let tasks = futures::stream::iter_ok(requests)
         .map(move |(idx, path, request)| {
             let prog_tx = prog_tx.clone();
+            prog_tx.send(DownloadStatus::Init(idx)).unwrap();
             client
                 .execute(request)
                 .map(|r| (path, r))
@@ -84,12 +90,15 @@ fn do_fetch(options: &CliOptions, templ: &template::Template) -> errors::Result<
 
                     write_file(&path, response, idx, prog_tx)
                 })
+                .map_err(move |e| (idx, e))
         })
         .buffer_unordered(options.parallelism);
 
     let f = futures::future::ok(())
         .and_then(move |_| tasks.collect().map(|_| ()))
-        .map_err(|_| ());
+        .map_err(move |(idx, err)| {
+            err_tx.send(DownloadStatus::Failed(idx, err)).unwrap();
+        });
     runtime.spawn(f);
 
     block_progress(file_info, prog_rx)?;
@@ -108,6 +117,12 @@ fn block_progress(file_info: HashMap<usize, (PathBuf, reqwest::Url)>,  rx: Recei
     while !state.is_done() {
         use DownloadStatus::*;
         match rx.recv() {
+            Ok(Init(idx)) => {
+                state.mark_connect(&idx);
+                renderer.clear()?;
+                renderer.println_multi(&state.render())?;
+                renderer.flush()?;
+            },
             Ok(Start(idx, size_opt)) => {
                 state.mark_current(&idx, size_opt);
                 renderer.clear()?;
@@ -132,6 +147,15 @@ fn block_progress(file_info: HashMap<usize, (PathBuf, reqwest::Url)>,  rx: Recei
                 renderer.clear()?;
                 let download_path = state.get_path(&idx).unwrap().display();
                 renderer.message(format!("Finished downloading {}", download_path))?;
+                renderer.println_multi(&state.render())?;
+                renderer.flush()?;
+            },
+            Ok(Failed(idx, err)) => {
+                state.mark_failed(&idx, err);
+                renderer.clear()?;
+                let download_path = state.get_path(&idx).unwrap().display();
+                let err = state.get_failure_error(&idx).unwrap();
+                renderer.message(format!("Failed to download {}: {}", download_path, err))?;
                 renderer.println_multi(&state.render())?;
                 renderer.flush()?;
             },

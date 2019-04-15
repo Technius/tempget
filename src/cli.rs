@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 use number_prefix::NumberPrefix;
 
+use errors;
+
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(name = "tempget", about = "Downloads files based on a template")]
 pub struct CliOptions {
@@ -22,17 +24,26 @@ pub struct CliOptions {
 }
 
 pub enum DownloadStatus {
+    /// Initializing connection
+    Init(usize),
+    /// Download started
     Start(usize, Option<u64>),
+    /// Download in progress, with the amount of bytes last downloaded
     Progress(usize, usize),
-    Finish(usize)
+    /// Download finished
+    Finish(usize),
+    /// Download failed
+    Failed(usize, errors::Error)
 }
 
 impl DownloadStatus {
     pub fn get_index(&self) -> &usize {
         match self {
+            DownloadStatus::Init(idx) => idx,
             DownloadStatus::Start(idx, _) => idx,
             DownloadStatus::Progress(idx, _) => idx,
-            DownloadStatus::Finish(idx) => idx
+            DownloadStatus::Finish(idx) => idx,
+            DownloadStatus::Failed(idx, _) => idx,
         }
     }
 }
@@ -134,44 +145,124 @@ impl ProgressRender {
 pub struct ProgressState {
     /// Maps file id to location on disk and URL
     pub file_info: HashMap<usize, (PathBuf, Url)>,
-    /// Maps id to download progress
-    pub current: HashMap<usize, FileDownloadProgress>,
-    /// Tracks ids of files done downloading
-    pub finished: HashSet<usize>
+    /// Tracks file download state information
+    states: HashMap<usize, DownloadState>,
+}
+
+/// Download progress state for one file
+enum DownloadState {
+    Queued,
+    Connecting,
+    InProgress(FileDownloadProgress),
+    Finished,
+    Failed(errors::Error)
 }
 
 impl ProgressState {
     pub fn new(file_info: HashMap<usize, (PathBuf, Url)>) -> Self {
-        let size = file_info.len();
+        let init_state = file_info.iter()
+            .map(|(idx, _)| (idx.clone(), DownloadState::Queued))
+            .collect();
         ProgressState {
-            current: HashMap::with_capacity(size),
+            states: init_state,
             file_info: file_info,
-            finished: HashSet::with_capacity(size)
         }
     }
 
     pub fn is_done(&self) -> bool {
-        self.file_info.len() == self.finished.len()
+        self.file_info.len() == self.ended().len()
+    }
+
+    /// Returns the indexes of all of the finished downloads.
+    pub fn finished(&self) -> HashSet<usize> {
+        self.states.iter()
+            .filter_map(|(idx, st)| {
+                if let DownloadState::Finished = st { Some(idx.clone()) } else { None }
+            })
+            .collect()
+    }
+
+    /// Returns the indexes of all of the failed downloads.
+    pub fn failed(&self) -> HashMap<usize, &errors::Error> {
+        self.states.iter()
+            .filter_map(|(idx, st)| {
+                if let DownloadState::Failed(err) = st { Some((idx.clone(), err)) } else { None }
+            })
+            .collect()
+    }
+
+    /// Returns the indexes of all finished or failed downloads.
+    pub fn ended(&self) -> HashSet<usize> {
+        self.states.iter()
+            .filter_map(|(idx, st)| {
+                match st {
+                    DownloadState::Failed(_) => Some(idx.clone()),
+                    DownloadState::Finished => Some(idx.clone()),
+                    _ => None
+                }
+            })
+            .collect()
+    }
+
+    /// Returns the indexes of all files being processed (not queued, finished, or failed)
+    fn processing(&self) -> HashSet<usize> {
+        self.states.iter()
+            .filter_map(|(idx, st)| match st {
+                DownloadState::Connecting => Some(idx.clone()),
+                DownloadState::InProgress(_) => Some(idx.clone()),
+                _ => None
+            })
+            .collect()
+    }
+
+    /// Marks the file with the given id as currently connecting if the file
+    /// download is being queued.
+    pub fn mark_connect(&mut self, id: &usize) {
+        self.states.entry(id.clone()).and_modify(|st| {
+            if let DownloadState::Queued = st {
+                *st = DownloadState::Connecting;
+            }
+        });
     }
 
     /// Marks the file with the given id as being downloaded if the file
     /// download has not started yet.
     pub fn mark_current(&mut self, id: &usize, size_opt: Option<u64>) {
-        self.current.entry(id.clone()).or_insert(FileDownloadProgress::new(size_opt));
+        self.states.entry(id.clone()).and_modify(|st| {
+            if let DownloadState::Connecting = st {
+                *st = DownloadState::InProgress(FileDownloadProgress::new(size_opt));
+            }
+        });
     }
 
     /// Marks the file with the given id as finished downloading. Does nothing
-    /// if the file is already marked as such.
+    /// if the file is not downloading.
     pub fn mark_finished(&mut self, id: &usize) {
-        if let Some(_) = self.current.remove(id) {
-            self.finished.insert(id.clone());
-        }
+        self.states.entry(id.clone()).and_modify(|st| {
+            if let DownloadState::InProgress(_) = st {
+                *st = DownloadState::Finished;
+            }
+        });
+    }
+
+    /// Marks the file with the given id as failed. Does nothing if the file is
+    /// already marked as such.
+    pub fn mark_failed(&mut self, id: &usize, err: errors::Error) {
+        self.states.entry(id.clone()).and_modify(|st| {
+            if let DownloadState::Failed(_) = st {} else {
+                *st = DownloadState::Failed(err);
+            }
+        });
     }
 
     /// Increases the progress of the file with the given id if it is being
     /// downloaded, or does nothing otherwise.
     pub fn inc_progress(&mut self, id: usize, amount: u64)  {
-        self.current.entry(id).and_modify(|prog| prog.inc(amount));
+        self.states.entry(id.clone()).and_modify(|st| {
+            if let DownloadState::InProgress(prog) = st {
+                prog.inc(amount);
+            }
+        });
     }
 
     #[inline]
@@ -187,6 +278,12 @@ impl ProgressState {
         return self.file_info.get(id).map(|(p, _)| p.as_path())
     }
 
+    pub fn get_failure_error(&self, id: &usize) -> Option<&errors::Error> {
+        self.states.get(id).and_then(|st| {
+            if let DownloadState::Failed(err) = st { Some(err) } else { None }
+        })
+    }
+
     /// Displays the size number, along with its units.
     fn display_bytes(size: u64) -> String {
         match NumberPrefix::decimal(size as f64) {
@@ -198,23 +295,32 @@ impl ProgressState {
     /// Renders the download progress to a `Vec<String>`
     pub fn render(&self) -> Vec<String> {
         let mut lines = Vec::new();
-        if !self.current.is_empty() {
+        let considered = self.processing().into_iter().collect::<Vec<usize>>();
+        if !considered.is_empty() {
             lines.push(format!(
-                "Downloading: ({}/{})", self.finished.len(), self.total()));
-            for (id, progress) in &self.current {
-                let path = self.get_path(id).unwrap();
+                "Downloading: ({}/{})", self.ended().len(), self.total()));
+            for id in considered {
+                let path = self.get_path(&id).unwrap();
                 let path_str = path.to_string_lossy();
-                if let Some(max_size) = &progress.max_size {
-                    let down_bytes = Self::display_bytes(progress.down_size);
-                    let total_bytes = Self::display_bytes(*max_size);
-                    let rate_bytes = Self::display_bytes(progress.last_update_rate);
-                    let percent = 100.0 * (progress.down_size as f64)
-                        / (*max_size as f64);
-                    lines.push(format!("{}\t{} / {} ({:.2}%), {}/s",
-                                       path_str, down_bytes, total_bytes, percent, rate_bytes));
-                } else {
-                    lines.push(format!("{}", path_str));
-                }
+                match self.states.get(&id).unwrap() {
+                    DownloadState::Connecting => {
+                        lines.push(format!("{}\tconnecting", path_str));
+                    },
+                    DownloadState::InProgress(progress) => {
+                        let down_bytes = Self::display_bytes(progress.down_size);
+                        let rate_bytes = Self::display_bytes(progress.last_update_rate);
+                        if let Some(max_size) = &progress.max_size {
+                            let total_bytes = Self::display_bytes(*max_size);
+                            let percent = 100.0 * (progress.down_size as f64)
+                                / (*max_size as f64);
+                            lines.push(format!("{}\t{} / {} ({:.2}%), {}/s",
+                                               path_str, down_bytes, total_bytes, percent, rate_bytes));
+                        } else {
+                            lines.push(format!("{}\t{}, {}/s", path_str, down_bytes, rate_bytes));
+                        }
+                    },
+                    _ => ()
+                };
             }
         }
         lines
