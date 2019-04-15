@@ -7,16 +7,27 @@ jobs:
       - checkout
       - restore_cache:
           name: Restore cached dependencies
-          key: project-cache
+          key: project-cache-{{ checksum "Cargo.lock" }}
       - run:
           name: Build
-          command: rustup run stable cargo build
+          command: cargo build --release
       - run:
           name: Unit tests
-          command: rustup run stable cargo test
+          command: cargo test --release
       - save_cache:
           name: Cache dependencies
-          key: project-cache
+          key: project-cache-{{ checksum "Cargo.lock" }}
           paths:
             - "~/.cargo"
-            - ".target"
+            - "target/release/deps"
+            - "target/release/.fingerprint"
+      - setup_remote_docker
+      - run:
+          name: Download tests
+          command: |
+            set -x -e
+            cd util
+            make -C serve
+            ./run_tests.sh
+      - store_artifacts:
+          path: "target/release/tempget"

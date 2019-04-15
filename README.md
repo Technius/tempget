@@ -1,3 +1,5 @@
+![build status](https://img.shields.io/circleci/project/github/Technius/tempget/master.svg)
+
 # Tempget
 
 Tempget is a cross-platform utility program that downloads files into a

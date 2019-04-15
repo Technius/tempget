@@ -1,0 +1,7 @@
+[retrieve]
+"testing/small" = "http://localhost/file_10m"
+"testing/medium" = "http://localhost/file_25m"
+"testing/large" = "http://localhost/file_50m"
+"testing/tiny" = "http://localhost/file_bytes"
+
+[extract]
