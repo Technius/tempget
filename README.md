@@ -1,4 +1,6 @@
-![build status](https://img.shields.io/circleci/project/github/Technius/tempget/master.svg)
+[![build status][ci_badge]](https://circleci.com/gh/Technius/tempget/)
+
+[ci_badge]: https://img.shields.io/circleci/project/github/Technius/tempget/master.svg
 
 # Tempget
 
