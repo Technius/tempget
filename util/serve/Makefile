@@ -1,6 +1,9 @@
-FILES := file_tiny file_10m file_25m file_50m
+FILES := file_tiny file_10m file_25m file_50m files.zip
 
 all: $(FILES)
+
+files.zip: file_tiny file_10m file_25m
+	zip $@ $^
 
 file_tiny:
 	echo "Hello world" > $@
