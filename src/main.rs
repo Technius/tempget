@@ -14,7 +14,7 @@ use std::io;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, SyncSender};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use structopt::StructOpt;
 use tokio::prelude::FutureExt;
 use tokio::prelude::StreamExt;
@@ -145,8 +145,8 @@ fn block_progress(file_info: HashMap<usize, (PathBuf, reqwest::Url)>,  rx: Recei
                 renderer.println_multi(&state.render())?;
                 renderer.flush()?;
             },
-            Ok(Progress(idx, down_size)) => {
-                state.inc_progress(idx, down_size as u64);
+            Ok(Progress(idx, down_size, timestamp)) => {
+                state.inc_progress(idx, down_size as u64, &timestamp);
                 let now = std::time::Instant::now();
                 if now - last_render > std::time::Duration::from_millis(200) {
                     last_render = now;
@@ -237,7 +237,8 @@ fn write_file(file_path: &Path, response: req::Response, idx: usize, prog_tx: Sy
             response.into_body()
                 .from_err::<_>()
                 .inspect(move |chunk| {
-                    prog_tx_prog.send(DownloadStatus::Progress(idx, chunk.len())).unwrap();
+                    prog_tx_prog.send(DownloadStatus::Progress(
+                        idx, chunk.len(), Instant::now())).unwrap();
                 })
                 .map(|chunk| (&*chunk).into())
                 .timeout(std::time::Duration::from_secs(READ_TIMEOUT))

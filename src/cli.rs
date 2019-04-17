@@ -3,7 +3,7 @@ use reqwest::Url;
 use std::io;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use number_prefix::NumberPrefix;
 
 use errors;
@@ -28,8 +28,8 @@ pub enum DownloadStatus {
     Init(usize),
     /// Download started
     Start(usize, Option<u64>),
-    /// Download in progress, with the amount of bytes last downloaded
-    Progress(usize, usize),
+    /// Download in progress, with the amount of bytes last downloaded and the timestamp
+    Progress(usize, usize, Instant),
     /// Download finished
     Finish(usize),
     /// Download failed
@@ -41,7 +41,7 @@ impl DownloadStatus {
         match self {
             DownloadStatus::Init(idx) => idx,
             DownloadStatus::Start(idx, _) => idx,
-            DownloadStatus::Progress(idx, _) => idx,
+            DownloadStatus::Progress(idx, _, _) => idx,
             DownloadStatus::Finish(idx) => idx,
             DownloadStatus::Failed(idx, _) => idx,
         }
@@ -56,8 +56,10 @@ pub struct FileDownloadProgress {
     pub down_size: u64,
     /// The last time this progress was updated.
     pub(self) last_update_time: Instant,
+    /// The number of bytes downloaded during the last update.
+    pub(self) last_update_size: u64,
     /// The rate of download (in bytes, rounded) during the last update.
-    pub(self) last_update_rate: u64
+    pub(self) last_update_rate: u64,
 }
 
 impl FileDownloadProgress {
@@ -66,19 +68,23 @@ impl FileDownloadProgress {
             max_size,
             down_size: 0,
             last_update_time: Instant::now(),
+            last_update_size: 0,
             last_update_rate: 0
         }
     }
 
     /// Adds the given amount of progress to the current download size.
-    pub fn inc(&mut self, b: u64) {
+    pub fn inc(&mut self, b: u64, timestamp: &Instant) {
         self.down_size += b;
-        let now = Instant::now();
-        let passed = now.duration_since(self.last_update_time).as_secs();
+        let passed = timestamp.duration_since(self.last_update_time);
         // Only update if time has passed
-        if passed > 0 {
-            self.last_update_rate = b / passed;
-            self.last_update_time = now;
+        // Use an update threshold to avoid rounding errors from small time deltas.
+        const UPDATE_THRESHOLD: Duration = Duration::from_millis(200);
+        if passed >= UPDATE_THRESHOLD {
+            let delta = self.down_size - self.last_update_size;
+            self.last_update_rate = (1000.0 * delta as f64 / (passed.as_millis() as f64)) as u64;
+            self.last_update_time = timestamp.clone();
+            self.last_update_size = self.down_size;
         }
     }
 }
@@ -257,10 +263,10 @@ impl ProgressState {
 
     /// Increases the progress of the file with the given id if it is being
     /// downloaded, or does nothing otherwise.
-    pub fn inc_progress(&mut self, id: usize, amount: u64)  {
+    pub fn inc_progress(&mut self, id: usize, amount: u64, timestamp: &Instant)  {
         self.states.entry(id.clone()).and_modify(|st| {
             if let DownloadState::InProgress(prog) = st {
-                prog.inc(amount);
+                prog.inc(amount, timestamp);
             }
         });
     }
