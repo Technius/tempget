@@ -16,6 +16,8 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, SyncSender};
 use std::time::Duration;
 use structopt::StructOpt;
+use tokio::prelude::FutureExt;
+use tokio::prelude::StreamExt;
 
 use tempget::template;
 use tempget::errors;
@@ -78,8 +80,11 @@ fn do_fetch(options: &CliOptions, templ: &template::Template) -> errors::Result<
             prog_tx.send(DownloadStatus::Init(idx)).unwrap();
             client
                 .execute(request)
-                .map(|r| (path, r))
                 .from_err::<errors::Error>()
+                .timeout(std::time::Duration::from_secs(REQUEST_TIMEOUT))
+                .map_err(|timer_err| timer_err.into_inner().unwrap_or(
+                    errors::ErrorKind::Timeout.into()))
+                .map(|r| (path, r))
                 .and_then(move |(path, response)| {
                     let size_opt = response.headers()
                         .get(reqwest::header::CONTENT_LENGTH)
@@ -220,18 +225,22 @@ fn write_file(file_path: &Path, response: req::Response, idx: usize, prog_tx: Sy
             let codec = tokio_codec::BytesCodec::new();
             let file_sink = tokio_codec::FramedWrite::new(file, codec);
             let prog_tx_prog = prog_tx.clone();
+            const READ_TIMEOUT: u64 = 10;
             response.into_body()
                 .from_err::<_>()
                 .inspect(move |chunk| {
                     prog_tx_prog.send(DownloadStatus::Progress(idx, chunk.len())).unwrap();
                 })
                 .map(|chunk| (&*chunk).into())
+                .timeout(std::time::Duration::from_secs(READ_TIMEOUT))
+                .map_err(|timer_err| timer_err.into_inner().unwrap_or(
+                    errors::ErrorKind::Timeout.into()))
                 .forward(file_sink)
                 .map(move |_| {
                     prog_tx.send(DownloadStatus::Finish(idx)).unwrap();
                     (idx, prog_tx)
                 })
-    })
+        })
 }
 
 fn create_parent_dirs(file_path: &Path) -> io::Result<()> {
