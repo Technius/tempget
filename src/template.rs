@@ -10,6 +10,7 @@ use errors;
 #[derive(Debug, Clone, Deserialize)]
 pub struct Template {
     pub retrieve: HashMap<String, url_serde::SerdeUrl>,
+    #[serde(default)]
     pub extract: HashMap<String, ExtractInfo>
 }
 

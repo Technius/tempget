@@ -1,0 +1,5 @@
+[retrieve]
+"testing/extract/files.zip" = "http://localhost/files.zip"
+
+[extract]
+"testing/extract/files.zip" = "testing/extract/files_extracted"
