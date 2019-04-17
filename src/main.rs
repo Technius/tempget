@@ -85,6 +85,14 @@ fn do_fetch(options: &CliOptions, templ: &template::Template) -> errors::Result<
                 .map_err(|timer_err| timer_err.into_inner().unwrap_or(
                     errors::ErrorKind::Timeout.into()))
                 .map(|r| (path, r))
+                .and_then(|(path, response)| {
+                    let status = response.status();
+                    if !status.is_success() {
+                        Err(errors::ErrorKind::StatusCode(status).into())
+                    } else {
+                        Ok((path, response))
+                    }
+                })
                 .and_then(move |(path, response)| {
                     let size_opt = response.headers()
                         .get(reqwest::header::CONTENT_LENGTH)

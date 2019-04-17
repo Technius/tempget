@@ -5,4 +5,3 @@
 # TODO: Handle connection timeouts
 # Currently commented out so the build doesn't fail
 # "testing/will_timeout" = "http://10.0.0.0"
-"testing/will_timeout" = "http://192.0.2.0"

@@ -33,6 +33,11 @@ pub mod errors {
                 description("download timed out since no data received"),
                 display("download timed out since no data received"),
             }
+
+            StatusCode(code: ::reqwest::StatusCode) {
+                description("HTTP response status code was not a success"),
+                display("non-successful HTTP response status code: {}", code),
+            }
         }
     }
 }
