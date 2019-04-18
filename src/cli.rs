@@ -20,7 +20,11 @@ pub struct CliOptions {
     pub no_extract: bool,
     #[structopt(short = "p", long = "parallelism", default_value = "4")]
     /// The maximum number of files that should be downloaded simultaneously.
-    pub parallelism: usize
+    pub parallelism: usize,
+    /// The maximum amount of time (in seconds) to wait to connect or receive
+    /// data before failing the download.
+    #[structopt(long, default_value = "10")]
+    pub timeout: u64
 }
 
 pub enum DownloadStatus {

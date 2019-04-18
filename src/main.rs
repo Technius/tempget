@@ -44,10 +44,10 @@ fn run(options: &CliOptions) -> errors::Result<()> {
 }
 
 fn do_fetch(options: &CliOptions, templ: &template::Template) -> errors::Result<()> {
-    const REQUEST_TIMEOUT: u64 = 10; // seconds
+    let timeout_secs = Duration::from_secs(options.timeout);
     let mut runtime = tokio::runtime::Builder::new().build()?;
     let client = req::Client::builder()
-        .connect_timeout(Duration::from_secs(REQUEST_TIMEOUT))
+        .connect_timeout(timeout_secs)
         .build()?;
     let mut requests = Vec::<(usize, PathBuf, req::Request)>::new();
     let mut idx: usize = 0;
@@ -80,7 +80,7 @@ fn do_fetch(options: &CliOptions, templ: &template::Template) -> errors::Result<
             let err_tx = prog_tx.clone();
             client
                 .execute(request)
-                .timeout(std::time::Duration::from_secs(REQUEST_TIMEOUT))
+                .timeout(timeout_secs)
                 .map_err(|timer_err| {
                     let err_res: errors::Error =
                         if let Some(e) = timer_err.into_inner() {
@@ -106,7 +106,7 @@ fn do_fetch(options: &CliOptions, templ: &template::Template) -> errors::Result<
 
                     prog_tx.send(DownloadStatus::Start(idx, size_opt)).unwrap();
 
-                    write_file(&path, response, idx, prog_tx)
+                    write_file(&path, response, idx, prog_tx, timeout_secs.clone())
                 })
                 .map(|_| ())
                 .or_else(move |err| {
@@ -231,7 +231,12 @@ fn do_extract(templ: template::Template) -> errors::Result<()> {
 /// Returns a `Future` that represents asynchronously writing the contents of
 /// the `Response` to the given file path. The resulting value is the given file
 /// path.
-fn write_file(file_path: &Path, response: req::Response, idx: usize, prog_tx: SyncSender<DownloadStatus>) -> impl Future<Item = (usize, SyncSender<DownloadStatus>), Error = errors::Error> {
+fn write_file(file_path: &Path,
+              response: req::Response,
+              idx: usize,
+              prog_tx: SyncSender<DownloadStatus>,
+              timeout: Duration)
+              -> impl Future<Item = (usize, SyncSender<DownloadStatus>), Error = errors::Error> {
     let file_path = file_path.to_owned();
 
     futures::future::result(create_parent_dirs(&file_path).map(|_| file_path.clone()))
@@ -241,7 +246,6 @@ fn write_file(file_path: &Path, response: req::Response, idx: usize, prog_tx: Sy
             let codec = tokio::codec::BytesCodec::new();
             let file_sink = tokio::codec::FramedWrite::new(file, codec);
             let prog_tx_prog = prog_tx.clone();
-            const READ_TIMEOUT: u64 = 10;
             response.into_body()
                 .from_err::<_>()
                 .inspect(move |chunk| {
@@ -249,7 +253,7 @@ fn write_file(file_path: &Path, response: req::Response, idx: usize, prog_tx: Sy
                         idx, chunk.len(), Instant::now())).unwrap();
                 })
                 .map(|chunk| (&*chunk).into())
-                .timeout(std::time::Duration::from_secs(READ_TIMEOUT))
+                .timeout(timeout)
                 .map_err(|timer_err| timer_err.into_inner().unwrap_or(
                     errors::ErrorKind::Timeout.into()))
                 .forward(file_sink)
