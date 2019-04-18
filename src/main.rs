@@ -45,7 +45,7 @@ fn run(options: &CliOptions) -> errors::Result<()> {
 }
 
 fn do_fetch(options: &CliOptions, templ: &template::Template) -> errors::Result<()> {
-    const REQUEST_TIMEOUT : u64 = 10; // seconds
+    const REQUEST_TIMEOUT: u64 = 10; // seconds
     let mut runtime = tokio::runtime::Builder::new().build()?;
     let client = req::Client::builder()
         .connect_timeout(Duration::from_secs(REQUEST_TIMEOUT))
@@ -68,7 +68,6 @@ fn do_fetch(options: &CliOptions, templ: &template::Template) -> errors::Result<
     // `sync_channel` instead of `channel` since status message order is
     // important
     let (prog_tx, prog_rx) = std::sync::mpsc::sync_channel::<DownloadStatus>(1000);
-    let err_tx = prog_tx.clone();
     // The futures might complete before progress tracking even begins, which
     // causes the Receiver to fail since all senders will be dropped. This keeps
     // the Receiver open until progress is reported.
@@ -78,22 +77,29 @@ fn do_fetch(options: &CliOptions, templ: &template::Template) -> errors::Result<
         .map(move |(idx, path, request)| {
             let prog_tx = prog_tx.clone();
             prog_tx.send(DownloadStatus::Init(idx)).unwrap();
+            let idx_err = idx.clone();
+            let err_tx = prog_tx.clone();
             client
                 .execute(request)
-                .from_err::<errors::Error>()
                 .timeout(std::time::Duration::from_secs(REQUEST_TIMEOUT))
-                .map_err(|timer_err| timer_err.into_inner().unwrap_or(
-                    errors::ErrorKind::Timeout.into()))
-                .map(|r| (path, r))
-                .and_then(|(path, response)| {
+                .map_err(|timer_err| {
+                    let err_res: errors::Error =
+                        if let Some(e) = timer_err.into_inner() {
+                            e.into()
+                        } else {
+                            errors::ErrorKind::Timeout.into()
+                        };
+                    err_res
+                })
+                .and_then(|response| {
                     let status = response.status();
                     if !status.is_success() {
                         Err(errors::ErrorKind::StatusCode(status).into())
                     } else {
-                        Ok((path, response))
+                        Ok(response)
                     }
                 })
-                .and_then(move |(path, response)| {
+                .and_then(move |response| {
                     let size_opt = response.headers()
                         .get(reqwest::header::CONTENT_LENGTH)
                         .and_then(|ct_len| ct_len.to_str().ok())
@@ -103,15 +109,18 @@ fn do_fetch(options: &CliOptions, templ: &template::Template) -> errors::Result<
 
                     write_file(&path, response, idx, prog_tx)
                 })
-                .map_err(move |e| (idx, e))
+                .map(|_| ())
+                .or_else(move |err| {
+                    // We cannot let the stream actually have an error, since
+                    // that would terminate all downloads. Instead, handle the
+                    // error gracefully here.
+                    err_tx.send(DownloadStatus::Failed(idx_err, err)).unwrap();
+                    Ok(())
+                })
         })
         .buffer_unordered(options.parallelism);
 
-    let f = futures::future::ok(())
-        .and_then(move |_| tasks.collect().map(|_| ()))
-        .map_err(move |(idx, err)| {
-            err_tx.send(DownloadStatus::Failed(idx, err)).unwrap();
-        });
+    let f = tasks.collect().map(|_| ());
     runtime.spawn(f);
 
     block_progress(file_info, prog_rx)?;
