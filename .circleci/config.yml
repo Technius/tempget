@@ -21,6 +21,7 @@ jobs:
             - "~/.cargo"
             - "target/release/deps"
             - "target/release/.fingerprint"
+            - "target/release/build"
       - setup_remote_docker
       - run:
           name: Download tests
