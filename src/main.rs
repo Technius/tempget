@@ -3,7 +3,6 @@ extern crate reqwest;
 extern crate zip;
 extern crate structopt;
 extern crate tokio;
-extern crate tokio_codec;
 extern crate futures;
 extern crate console;
 
@@ -239,8 +238,8 @@ fn write_file(file_path: &Path, response: req::Response, idx: usize, prog_tx: Sy
         .from_err::<errors::Error>()
         .and_then(|path| tokio::fs::File::create(path).from_err::<_>())
         .and_then(move |file| {
-            let codec = tokio_codec::BytesCodec::new();
-            let file_sink = tokio_codec::FramedWrite::new(file, codec);
+            let codec = tokio::codec::BytesCodec::new();
+            let file_sink = tokio::codec::FramedWrite::new(file, codec);
             let prog_tx_prog = prog_tx.clone();
             const READ_TIMEOUT: u64 = 10;
             response.into_body()
