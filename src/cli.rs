@@ -80,6 +80,13 @@ impl FileDownloadProgress {
     /// Adds the given amount of progress to the current download size.
     pub fn inc(&mut self, b: u64, timestamp: &Instant) {
         self.down_size += b;
+
+        // The write stream may not send its updates in order, so don't update
+        // the rate if we get a timestamp older than the last update.
+        if timestamp < &self.last_update_time {
+           return;
+        }
+
         let passed = timestamp.duration_since(self.last_update_time);
         // Only update if time has passed
         // Use an update threshold to avoid rounding errors from small time deltas.
