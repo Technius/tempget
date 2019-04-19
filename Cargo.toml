@@ -11,8 +11,11 @@ serde_derive = "^1.0.8"
 url_serde = "0.2.0"
 error-chain = "0.12.0"
 zip = "^0.5.2"
-structopt = "0.2.0"
+structopt = { version = "~0.2.15", default-features = false, features = ["color", "suggestions", "wrap_help"] }
 futures = "~0.1.21"
 tokio = "~0.1.18"
 console = "~0.6.1"
 number_prefix = "0.3.0"
+
+[profile.release]
+lto = true
