@@ -5,8 +5,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use number_prefix::NumberPrefix;
+use structopt::StructOpt;
 
-use errors;
+use crate::errors;
 
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(name = "tempget", about = "Downloads files based on a template")]

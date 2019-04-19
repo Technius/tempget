@@ -1,6 +1,6 @@
 use reqwest::Method;
-use reqwest::async::Request;
-use template::Template;
+use reqwest::r#async::Request;
+use crate::template::Template;
 use std::collections::HashMap;
 
 /// Generates a mapping of file to HTTP requests

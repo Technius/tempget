@@ -3,9 +3,10 @@ use std::fs;
 use std::path::Path;
 use std::io::Read;
 use std::collections::HashMap;
+use serde_derive::Deserialize;
 use url_serde; // For deriving Deserialize for Url
 
-use errors;
+use crate::errors;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Template {

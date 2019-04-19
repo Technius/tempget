@@ -1,18 +1,5 @@
 #[macro_use]
-extern crate serde_derive;
-#[macro_use]
 extern crate error_chain;
-#[macro_use]
-extern crate structopt;
-
-extern crate serde;
-extern crate config;
-extern crate reqwest;
-extern crate url_serde;
-extern crate zip;
-extern crate console;
-extern crate number_prefix;
-extern crate tokio;
 
 pub mod template;
 pub mod fetcher;

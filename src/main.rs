@@ -1,13 +1,5 @@
-extern crate tempget;
-extern crate reqwest;
-extern crate zip;
-extern crate structopt;
-extern crate tokio;
-extern crate futures;
-extern crate console;
-
 use futures::{Future, Stream};
-use reqwest::async as req;
+use reqwest::r#async as req;
 use std::fs;
 use std::io;
 use std::collections::HashMap;
@@ -136,7 +128,7 @@ fn block_progress(file_info: HashMap<usize, (PathBuf, reqwest::Url)>,  rx: Recei
     let mut last_render = std::time::Instant::now();
     let mut renderer = ProgressRender::stderr();
     while !state.is_done() {
-        use DownloadStatus::*;
+        use crate::DownloadStatus::*;
         match rx.recv() {
             Ok(Init(idx)) => {
                 state.mark_connect(&idx);
@@ -189,7 +181,7 @@ fn block_progress(file_info: HashMap<usize, (PathBuf, reqwest::Url)>,  rx: Recei
 
 fn do_extract(templ: template::Template) -> errors::Result<()> {
     for (archive, info) in &templ.extract {
-        let mut file = fs::File::open(Path::new(archive))?;
+        let file = fs::File::open(Path::new(archive))?;
         let mut zip_archive = zip::read::ZipArchive::new(file)?;
         let mut extract_files = Vec::<(usize, PathBuf)>::new();
         match info {
