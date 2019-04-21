@@ -13,7 +13,7 @@ use crate::errors;
 #[structopt(name = "tempget", about = "Downloads files based on a template")]
 pub struct CliOptions {
     #[structopt(parse(from_os_str))]
-    /// The template file to use. By default, this is set to "template.toml".
+    /// The template file to use.
     pub template_file: PathBuf,
     #[structopt(long = "no-extract")]
     /// When this flag is present, files are not extracted from the given zip
