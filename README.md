@@ -1,8 +1,8 @@
+# Tempget
+
 [![build status][ci_badge]](https://circleci.com/gh/Technius/tempget/)
 
 [ci_badge]: https://img.shields.io/circleci/project/github/Technius/tempget/master.svg
-
-# Tempget
 
 Tempget is a cross-platform CLI utility program that downloads (and possibly
 extracts) files into locations specified by a "template" file. Tempget can
@@ -37,11 +37,16 @@ Examples of use cases:
 
 ## Installation
 
-Pre-compiled Linux binaries are available on the [Releases](/releases) page.
+Pre-compiled Linux binaries are available on the
+[Releases](https://github.com/Technius/tempget/releases) page.
 
-If you are on Mac/Windows or you want to compile from source, run `cargo install
---git https://github.com/Technius/tempget --tag latest-release`. Remove the `-tag
-<version>` part to install the latest development version.
+If you are on Mac/Windows or you want to compile from source, run
+
+```plain
+cargo install --git https://github.com/Technius/tempget --tag latest-release
+```
+
+Remove the `-tag <version>` part to install the latest development version.
 
 ## Usage
 
