@@ -22,7 +22,8 @@ fn main() {
     match res {
         Ok(()) => {},
         Err(err) => {
-            println!("Error: {}", err)
+            println!("Error: {}", err);
+            std::process::exit(1);
         }
     }
 }
@@ -30,16 +31,29 @@ fn main() {
 /// Run the program with the given options.
 fn run(options: &CliOptions) -> errors::Result<()> {
     let templ = template::Template::from_file(&options.template_file)?;
-    do_fetch(options, &templ)?;
-    if !options.no_extract {
+
+    let final_state = do_fetch(options, &templ)?;
+    // Exit with exit code 1 if any of the downloads failed
+    let failed = final_state.failed();
+    if failed.len() > 0 {
+        let msgs = failed.iter()
+            .map(|(id, err)| {
+                let path = final_state.get_path(id).unwrap();
+                format!("\t{}: {}", path.to_string_lossy(), err)
+            })
+            .collect::<Vec<String>>();
+        println!("The following downloads failed:\n{}", msgs.join("\n"));
+        std::process::exit(1);
+    } else if !options.no_extract {
         do_extract(templ)?;
     }
     Ok(())
 }
 
 /// Download the files specified in the `retrieve` section of the template and
-/// display the progress.
-fn do_fetch(options: &CliOptions, templ: &template::Template) -> errors::Result<()> {
+/// display the progress. Returns the final `ProgressState` containing all file
+/// download progress information.
+fn do_fetch(options: &CliOptions, templ: &template::Template) -> errors::Result<ProgressState> {
     let timeout_dur = Duration::from_secs(options.timeout);
     let mut runtime = tokio::runtime::Builder::new().build()?;
     let client = req::Client::builder()
@@ -122,16 +136,16 @@ fn do_fetch(options: &CliOptions, templ: &template::Template) -> errors::Result<
     let f = tasks.collect().map(|_| ());
     runtime.spawn(f);
 
-    block_progress(file_info, prog_rx)?;
+    let final_state = block_progress(file_info, prog_rx)?;
     drop(keep_alive);
     runtime.shutdown_on_idle().wait().expect("Could not shutdown tokio runtime");
-    Ok(())
+    Ok(final_state)
 }
 
 /// Blocks the current thread and renders download progress until all files have
 /// been downloaded.
 fn block_progress(file_info: HashMap<usize, (PathBuf, reqwest::Url)>,  rx: Receiver<DownloadStatus>)
-                  -> io::Result<()> {
+                  -> io::Result<ProgressState> {
     let mut state = ProgressState::new(file_info);
     // Throttle rendering so we don't spend so much time reporting progress
     let mut last_render = std::time::Instant::now();
@@ -185,7 +199,7 @@ fn block_progress(file_info: HashMap<usize, (PathBuf, reqwest::Url)>,  rx: Recei
         }
     };
     renderer.clear()?;
-    Ok(())
+    Ok(state)
 }
 
 /// Extract all files specified in the template file. Note that extraction is

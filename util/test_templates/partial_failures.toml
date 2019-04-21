@@ -1,0 +1,3 @@
+[retrieve]
+"testing/failure_no_host" = "http://nonexistent_host"
+"testing/success_small" = "http://localhost/file_10m"
