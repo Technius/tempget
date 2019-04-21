@@ -7,7 +7,7 @@ jobs:
       - checkout
       - restore_cache:
           name: Restore cached dependencies
-          key: project-cache-{{ checksum "Cargo.lock" }}
+          key: project-cache-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}
       - run:
           name: Build
           command: cargo build --release
@@ -16,7 +16,7 @@ jobs:
           command: cargo test --release
       - save_cache:
           name: Cache dependencies
-          key: project-cache-{{ checksum "Cargo.lock" }}
+          key: project-cache-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}
           paths:
             - "~/.cargo"
             - "target/release/deps"
@@ -30,5 +30,9 @@ jobs:
             cd util
             make -C serve
             ./run_tests.sh
+      - run:
+          name: Prepare release binary
+          command: |
+            strip target/release/tempget
       - store_artifacts:
           path: "target/release/tempget"
