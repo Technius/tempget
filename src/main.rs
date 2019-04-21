@@ -83,14 +83,14 @@ fn do_fetch(options: &CliOptions, templ: &template::Template) -> errors::Result<
                         if let Some(e) = timer_err.into_inner() {
                             e.into()
                         } else {
-                            errors::ErrorKind::Timeout.into()
+                            errors::timeout()
                         };
                     err_res
                 })
                 .and_then(|response| {
                     let status = response.status();
                     if !status.is_success() {
-                        Err(errors::ErrorKind::StatusCode(status).into())
+                        Err(errors::status_code(status))
                     } else {
                         Ok(response)
                     }
@@ -257,7 +257,7 @@ fn write_file(file_path: &Path,
                 .map(|chunk| (&*chunk).into())
                 .timeout(timeout)
                 .map_err(|timer_err| timer_err.into_inner().unwrap_or(
-                    errors::ErrorKind::Timeout.into()))
+                    errors::timeout()))
                 .forward(file_sink)
                 .map(move |_| {
                     prog_tx.send(DownloadStatus::Finish(idx)).unwrap();

@@ -1,30 +1,31 @@
 #[macro_use]
-extern crate error_chain;
+extern crate failure;
 
 pub mod template;
 pub mod fetcher;
 pub mod cli;
 
-#[allow(deprecated)] // See https://github.com/rust-lang-nursery/error-chain/issues/254
 pub mod errors {
-    error_chain! {
-        foreign_links {
-            Io(::std::io::Error);
-            ReqwestFail(::reqwest::Error);
-            Config(::config::ConfigError);
-            Zip(::zip::result::ZipError);
-        }
+    pub type Result<T> = ::std::result::Result<T, failure::Error>;
+    pub type Error = ::failure::Error;
 
-        errors {
-            Timeout {
-                description("download timed out since no data received"),
-                display("download timed out since no data received"),
-            }
+    #[derive(Fail, Debug)]
+    #[fail(display = "download timed out since no data received")]
+    pub struct Timeout;
 
-            StatusCode(code: ::reqwest::StatusCode) {
-                description("HTTP response status code was not a success"),
-                display("non-successful HTTP response status code: {}", code),
-            }
-        }
+    #[derive(Fail, Debug)]
+    #[fail(display = "non-successful HTTP response status code: {}", code)]
+    pub struct StatusCode {
+        pub code: ::reqwest::StatusCode
+    }
+
+    /// Constructs a `Timeout` error
+    pub fn timeout() -> Error {
+        (Timeout {}).into()
+    }
+
+    /// Constructs a `StatusCode` error
+    pub fn status_code(code: ::reqwest::StatusCode) -> Error {
+        (StatusCode { code }).into()
     }
 }
