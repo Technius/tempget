@@ -9,9 +9,12 @@ use url_serde; // For deriving Deserialize for Url
 use crate::errors;
 
 #[derive(Debug, Clone, Deserialize)]
+/// Represents a template file.
 pub struct Template {
+    /// The files to download from the given URLs.
     pub retrieve: HashMap<String, url_serde::SerdeUrl>,
     #[serde(default)]
+    /// The file archives that should be extracted.
     pub extract: HashMap<String, ExtractInfo>
 }
 
@@ -30,7 +33,11 @@ impl Template {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
+/// Indicates how the files in an archive should be extracted.
 pub enum ExtractInfo {
+    /// All files in the archive should be extracted to the given directory.
     Directory(String),
+    /// The files specified in the mapping should be extracted to the specified
+    /// locations.
     Mapping(HashMap<String, String>)
 }

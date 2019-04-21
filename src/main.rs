@@ -15,6 +15,7 @@ use tempget::errors;
 use tempget::cli::*;
 use tempget::template::ExtractInfo;
 
+/// Application entry point.
 fn main() {
     let options = CliOptions::from_args();
     let res = run(&options);
@@ -26,6 +27,7 @@ fn main() {
     }
 }
 
+/// Run the program with the given options.
 fn run(options: &CliOptions) -> errors::Result<()> {
     let templ = template::Template::from_file(&options.template_file)?;
     do_fetch(options, &templ)?;
@@ -35,6 +37,8 @@ fn run(options: &CliOptions) -> errors::Result<()> {
     Ok(())
 }
 
+/// Download the files specified in the `retrieve` section of the template and
+/// display the progress.
 fn do_fetch(options: &CliOptions, templ: &template::Template) -> errors::Result<()> {
     let timeout_secs = Duration::from_secs(options.timeout);
     let mut runtime = tokio::runtime::Builder::new().build()?;
@@ -64,6 +68,7 @@ fn do_fetch(options: &CliOptions, templ: &template::Template) -> errors::Result<
     // the Receiver open until progress is reported.
     let keep_alive = prog_tx.clone();
 
+    // TODO: refactor into separate function (Vec<Requests> -> Stream<Vec<()>>)
     let tasks = futures::stream::iter_ok(requests)
         .map(move |(idx, path, request)| {
             let prog_tx = prog_tx.clone();
@@ -100,13 +105,15 @@ fn do_fetch(options: &CliOptions, templ: &template::Template) -> errors::Result<
 
                     write_file(&path, response, idx, prog_tx, timeout_secs.clone())
                 })
-                .map(|_| ())
-                .or_else(move |err| {
-                    // We cannot let the stream actually have an error, since
-                    // that would terminate all downloads. Instead, handle the
-                    // error gracefully here.
-                    err_tx.send(DownloadStatus::Failed(idx_err, err)).unwrap();
-                    Ok(())
+                .then(move |res| match res {
+                    Ok(_) => Ok(()),
+                    Err(err) => {
+                        // We cannot let the stream actually have an error, since
+                        // that would terminate all downloads. Instead, handle the
+                        // error gracefully here.
+                        err_tx.send(DownloadStatus::Failed(idx_err, err)).unwrap();
+                        Ok(())
+                    }
                 })
         })
         .buffer_unordered(options.parallelism);
@@ -120,7 +127,8 @@ fn do_fetch(options: &CliOptions, templ: &template::Template) -> errors::Result<
     Ok(())
 }
 
-/// Blocks and renders download progress until all files have been downloaded.
+/// Blocks the current thread and renders download progress until all files have
+/// been downloaded.
 fn block_progress(file_info: HashMap<usize, (PathBuf, reqwest::Url)>,  rx: Receiver<DownloadStatus>)
                   -> io::Result<()> {
     let mut state = ProgressState::new(file_info);
@@ -179,6 +187,8 @@ fn block_progress(file_info: HashMap<usize, (PathBuf, reqwest::Url)>,  rx: Recei
     Ok(())
 }
 
+/// Extract all files specified in the template file. Note that extraction is
+/// currently synchronous.
 fn do_extract(templ: template::Template) -> errors::Result<()> {
     for (archive, info) in &templ.extract {
         let file = fs::File::open(Path::new(archive))?;
@@ -256,6 +266,7 @@ fn write_file(file_path: &Path,
         })
 }
 
+/// Create all parent directories of the given path.
 fn create_parent_dirs(file_path: &Path) -> io::Result<()> {
     if let Some(parent) = file_path.parent() {
         if !parent.exists() {

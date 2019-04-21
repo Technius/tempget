@@ -28,6 +28,7 @@ pub struct CliOptions {
     pub timeout: u64
 }
 
+/// A message indicating the progress made by a file with the given id.
 pub enum DownloadStatus {
     /// Initializing connection
     Init(usize),
@@ -42,6 +43,7 @@ pub enum DownloadStatus {
 }
 
 impl DownloadStatus {
+    /// Returns the id of the file that this status represents.
     pub fn get_index(&self) -> &usize {
         match self {
             DownloadStatus::Init(idx) => idx,
@@ -106,7 +108,9 @@ impl FileDownloadProgress {
 /// Do _not_ interleave standard printing with `ProgressRender`, or else there
 /// will be strange clearing behavior. Instead, call `ProgressRender.message`.
 pub struct ProgressRender {
+    /// The number of lines that are being used to render progress.
     lines: usize,
+    /// The terminal used to render text.
     term: Term
 }
 
@@ -118,6 +122,7 @@ impl ProgressRender {
         }
     }
 
+    /// Creates a `ProgressRender` that renders progress on stderr.
     pub fn stderr() -> Self {
         Self::with_term(Term::buffered_stderr())
     }
@@ -159,7 +164,10 @@ impl ProgressRender {
     }
 }
 
-/// Contains information about the download progress.
+/// Keeps track of the download progress for each file being downloaded. The
+/// progress of each file is treated as a state machine, where the states
+/// consist of `DownloadState`s. The states can be updated by calling the
+/// appropriate methods, such as `mark_current` or `inc_progress`.
 pub struct ProgressState {
     /// Maps file id to location on disk and URL
     pub file_info: HashMap<usize, (PathBuf, Url)>,
@@ -167,12 +175,17 @@ pub struct ProgressState {
     states: HashMap<usize, DownloadState>,
 }
 
-/// Download progress state for one file
+/// Download progress state for one file.
 enum DownloadState {
+    /// The file is currently queued for download.
     Queued,
+    /// Currently attempting to connect to the URL where the file is located.
     Connecting,
+    /// The download is in progress.
     InProgress(FileDownloadProgress),
+    /// The download is completed.
     Finished,
+    /// The download failed due to some error.
     Failed(errors::Error)
 }
 
@@ -187,6 +200,7 @@ impl ProgressState {
         }
     }
 
+    /// Returns true when each file is downloaded or has failed to download.
     pub fn is_done(&self) -> bool {
         self.file_info.len() == self.ended().len()
     }
@@ -284,18 +298,25 @@ impl ProgressState {
     }
 
     #[inline]
+    /// Returns the total number of files tracked by this `ProgressState`.
     pub fn total(&self) -> usize {
         return self.file_info.len()
     }
 
+    /// Returns the URL of the file with the given id, or `None` if there is no
+    /// such file.
     pub fn get_url(&self, id: &usize) -> Option<&reqwest::Url> {
         return self.file_info.get(id).map(|(_, u)| u)
     }
 
+    /// Returns the path to which the file with the given id will be downloaded
+    /// to, or `None` if there is no such file.
     pub fn get_path(&self, id: &usize) -> Option<&Path> {
         return self.file_info.get(id).map(|(p, _)| p.as_path())
     }
 
+    /// Returns the error that caused the file with the given id to fail, or
+    /// `None` if there is no such file or the file has not failed to download.
     pub fn get_failure_error(&self, id: &usize) -> Option<&errors::Error> {
         self.states.get(id).and_then(|st| {
             if let DownloadState::Failed(err) = st { Some(err) } else { None }
