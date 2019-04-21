@@ -46,7 +46,7 @@ If you are on Mac/Windows or you want to compile from source, run
 cargo install --git https://github.com/Technius/tempget --tag latest-release
 ```
 
-Remove the `-tag <version>` part to install the latest development version.
+Remove the `--tag <version>` part to install the latest development version.
 
 ## Usage
 
