@@ -40,10 +40,10 @@ fn run(options: &CliOptions) -> errors::Result<()> {
 /// Download the files specified in the `retrieve` section of the template and
 /// display the progress.
 fn do_fetch(options: &CliOptions, templ: &template::Template) -> errors::Result<()> {
-    let timeout_secs = Duration::from_secs(options.timeout);
+    let timeout_dur = Duration::from_secs(options.timeout);
     let mut runtime = tokio::runtime::Builder::new().build()?;
     let client = req::Client::builder()
-        .connect_timeout(timeout_secs)
+        .connect_timeout(timeout_dur)
         .build()?;
     let mut requests = Vec::<(usize, PathBuf, req::Request)>::new();
     let mut idx: usize = 0;
@@ -75,15 +75,16 @@ fn do_fetch(options: &CliOptions, templ: &template::Template) -> errors::Result<
             prog_tx.send(DownloadStatus::Init(idx)).unwrap();
             let idx_err = idx.clone();
             let err_tx = prog_tx.clone();
+            let timeout_secs = timeout_dur.as_secs();
             client
                 .execute(request)
-                .timeout(timeout_secs)
-                .map_err(|timer_err| {
+                .timeout(timeout_dur)
+                .map_err(move |timer_err| {
                     let err_res: errors::Error =
                         if let Some(e) = timer_err.into_inner() {
                             e.into()
                         } else {
-                            errors::timeout()
+                            errors::timeout(timeout_secs)
                         };
                     err_res
                 })
@@ -103,7 +104,7 @@ fn do_fetch(options: &CliOptions, templ: &template::Template) -> errors::Result<
 
                     prog_tx.send(DownloadStatus::Start(idx, size_opt)).unwrap();
 
-                    write_file(&path, response, idx, prog_tx, timeout_secs.clone())
+                    write_file(&path, response, idx, prog_tx, timeout_dur.clone())
                 })
                 .then(move |res| match res {
                     Ok(_) => Ok(()),
@@ -256,8 +257,8 @@ fn write_file(file_path: &Path,
                 })
                 .map(|chunk| (&*chunk).into())
                 .timeout(timeout)
-                .map_err(|timer_err| timer_err.into_inner().unwrap_or(
-                    errors::timeout()))
+                .map_err(move |timer_err| timer_err.into_inner().unwrap_or(
+                    errors::timeout(timeout.as_secs())))
                 .forward(file_sink)
                 .map(move |_| {
                     prog_tx.send(DownloadStatus::Finish(idx)).unwrap();
