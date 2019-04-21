@@ -9,6 +9,8 @@ extracts) files into locations specified by a "template" file. Tempget can
 download files in parallel, and it provides a nice command line interface with
 progress indicators.
 
+![demo](/demo.gif)
+
 Examples of use cases:
 
 * You want to download a bunch of programs from many different websites.
