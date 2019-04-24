@@ -18,7 +18,7 @@ pub struct Template {
 }
 
 impl Template {
-    pub fn from_file(file_path: &Path) -> errors::Result<Self> {
+    pub fn from_file<P: AsRef<Path>>(file_path: P) -> errors::Result<Self> {
         let mut cfg = config::Config::new();
         let mut file = fs::File::open(file_path)?;
         let mut contents = String::new();

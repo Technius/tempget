@@ -22,7 +22,7 @@ fn main() {
     match res {
         Ok(()) => {},
         Err(err) => {
-            println!("Error: {}", err);
+            eprintln!("Error: {}", err);
             std::process::exit(1);
         }
     }
@@ -33,21 +33,21 @@ fn run(options: &CliOptions) -> errors::Result<()> {
     let templ = template::Template::from_file(&options.template_file)?;
 
     let final_state = do_fetch(options, &templ)?;
-    // Exit with exit code 1 if any of the downloads failed
     let failed = final_state.failed();
     if failed.len() > 0 {
-        let msgs = failed.iter()
+        let files: Vec<(PathBuf, String)> = failed.iter()
             .map(|(id, err)| {
-                let path = final_state.get_path(id).unwrap();
-                format!("\t{}: {}", path.to_string_lossy(), err)
+                let p = final_state.get_path(id).unwrap().to_owned();
+                let e = err.to_string();
+                (p, e)
             })
-            .collect::<Vec<String>>();
-        println!("The following downloads failed:\n{}", msgs.join("\n"));
-        std::process::exit(1);
+            .collect();
+        Err(errors::download_failed(files))
     } else if !options.no_extract {
-        do_extract(templ)?;
+        do_extract(templ)
+    } else {
+        Ok(())
     }
-    Ok(())
 }
 
 /// Download the files specified in the `retrieve` section of the template and
@@ -254,9 +254,7 @@ fn write_file(file_path: &Path,
               prog_tx: SyncSender<DownloadStatus>,
               timeout: Duration)
               -> impl Future<Item = (usize, SyncSender<DownloadStatus>), Error = errors::Error> {
-    let file_path = file_path.to_owned();
-
-    futures::future::result(create_parent_dirs(&file_path).map(|_| file_path.clone()))
+    futures::future::result(create_parent_dirs(&file_path).map(|_| file_path.to_owned()))
         .from_err::<errors::Error>()
         .and_then(|path| tokio::fs::File::create(path).from_err::<_>())
         .and_then(move |file| {
